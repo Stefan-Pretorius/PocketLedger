@@ -9,7 +9,7 @@ import {
 import { PageHeader } from "../components/Layout";
 import { BudgetYearTabs, BudgetMonthGrid } from "../components/BudgetPicker";
 import {
-  Plus, Trash2, Edit2, Wallet, RefreshCw, ToggleLeft, ToggleRight, CalendarClock, Copy, ChevronDown, Repeat, Tag, MoveRight, AlertTriangle,
+  Plus, Trash2, Edit2, Wallet, RefreshCw, ToggleLeft, ToggleRight, CalendarClock, Copy, ChevronDown, Repeat, Tag, MoveRight, AlertTriangle, Target,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -567,6 +567,8 @@ function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
   movingExpense: number | null; setMovingExpense: (v: number | null) => void; movingRefs: React.MutableRefObject<Record<number, HTMLDivElement | null>>;
   handleConvertToRecurring: (cat: any) => void; setEditCat: (cat: any) => void; setConfirmDelete: (v: any) => void;
 }) {
+  const { goals } = useStore();
+  const linkedGoal = cat.linkedGoalId ? goals.find((g: any) => g.id === cat.linkedGoalId) : null;
   const pct = cat.allocatedAmount > 0 ? (cat.spent ?? 0) / cat.allocatedAmount : 0;
   const over = pct > 1;
   const isExpanded = expandedCategory === cat.id;
@@ -582,7 +584,14 @@ function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
             <span className="text-sm font-medium text-foreground inline-flex items-center gap-1.5">
               {cat.name}
               {recurring && <CalendarClock size={11} className="text-primary" />}
+              {linkedGoal && <Target size={11} style={{ color: linkedGoal.color }} />}
             </span>
+            {linkedGoal && (
+              <p className="text-[10px] text-muted-foreground/70 leading-tight">
+                <Target size={9} className="inline mr-0.5" style={{ color: linkedGoal.color }} />
+                {linkedGoal.name}
+              </p>
+            )}
             <div className="flex items-center gap-1.5">
               <span className={cn("text-xs font-medium flex items-center gap-1", over ? "text-destructive" : "text-muted-foreground")}>
                 <span>{formatCurrency(cat.spent ?? 0)} / {formatCurrency(cat.allocatedAmount)}</span>
