@@ -69,7 +69,8 @@ function ContributeModal({
 }) {
   const { updateGoal, createExpense, activeBudgetId, categories } = useStore();
   const [amount, setAmount] = useState("");
-  const [categoryId, setCategoryId] = useState<number | null>(null);
+  const linkedCat = goal && categories.find(c => c.linkedGoalId === goal.id);
+  const [categoryId, setCategoryId] = useState<number | null>(linkedCat?.id ?? null);
   const budgetCats = categories.filter(c => c.budgetId === activeBudgetId);
 
   const save = () => {

@@ -30,6 +30,18 @@ function ExpenseModal({
   const [merchant, setMerchant] = useState(initial?.merchant ?? "");
   const [notes, setNotes] = useState(initial?.notes ?? "");
 
+  // Auto-suggest withdrawal when a linked category is selected (new expenses only)
+  useEffect(() => {
+    if (initial) return;
+    if (categoryId != null) {
+      const cat = budgetCats.find(c => c.id === categoryId);
+      if (cat?.linkedGoalId != null) {
+        setGoalId(cat.linkedGoalId);
+        setWithdraw(true);
+      }
+    }
+  }, [categoryId, initial]);
+
   const isGoalMode = goalId != null;
 
   const save = () => {

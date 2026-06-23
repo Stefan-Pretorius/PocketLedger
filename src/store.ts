@@ -843,6 +843,7 @@ export const useStore = create<AppState>()((set, get) => ({
           get().updateGoal(tx.goalWithdrawalId, { currentAmount: Math.max(0, goal.currentAmount - tx.amount) });
           get().createExpense({
             budgetId: txBudgetId,
+            categoryId: tx.categoryId ?? undefined,
             description: tx.description,
             amount: tx.amount,
             date: tx.date,

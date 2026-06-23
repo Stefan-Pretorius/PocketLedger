@@ -34,6 +34,8 @@ export interface Category {
   spent?: number;
   /** Round-up/savings categories don't consume budget — they track automatic savings transfers */
   isRounding?: boolean;
+  /** Linked savings goal (envelope) — contributions auto-select this category, expenses in this category auto-suggest withdrawal */
+  linkedGoalId?: number;
 }
 
 export interface Expense {

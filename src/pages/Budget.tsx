@@ -141,23 +141,24 @@ function CategoryModal({
   visible, onClose, budgetId, initial,
 }: {
   visible: boolean; onClose: () => void; budgetId: number;
-  initial?: { id: number; name: string; allocatedAmount: number; color: string; icon: string; isRounding?: boolean };
+  initial?: { id: number; name: string; allocatedAmount: number; color: string; icon: string; isRounding?: boolean; linkedGoalId?: number };
 }) {
-  const { createCategory, updateCategory } = useStore();
+  const { createCategory, updateCategory, goals } = useStore();
   const [name, setName] = useState(initial?.name ?? "");
   const [amount, setAmount] = useState(String(initial?.allocatedAmount ?? ""));
   const [isRounding, setIsRounding] = useState(initial?.isRounding ?? false);
   const [color, setColor] = useState(initial?.color ?? Colors.categoryColors[0]);
+  const [linkedGoalId, setLinkedGoalId] = useState<number | null>(initial?.linkedGoalId ?? null);
 
   const save = () => {
     const amt = isRounding ? 0 : parseFloat(amount);
     if (!name.trim()) { toast.error("Category name is required"); return; }
     if (!isRounding && (isNaN(amt) || amt < 0)) { toast.error("Enter a valid amount"); return; }
     if (initial) {
-      updateCategory(initial.id, { name, allocatedAmount: amt, color, isRounding });
+      updateCategory(initial.id, { name, allocatedAmount: amt, color, isRounding, linkedGoalId: linkedGoalId ?? undefined });
       toast.success("Category updated");
     } else {
-      createCategory({ budgetId, name, allocatedAmount: amt, color, icon: "wallet", isRounding });
+      createCategory({ budgetId, name, allocatedAmount: amt, color, icon: "wallet", isRounding, linkedGoalId: linkedGoalId ?? undefined });
       toast.success("Category added");
     }
     onClose();
@@ -205,6 +206,32 @@ function CategoryModal({
           <label className="text-sm font-medium text-muted-foreground block mb-2">Color</label>
           <ColorPicker value={color} onChange={setColor} colors={Colors.categoryColors} />
         </div>
+        {!isRounding && goals.length > 0 && (
+          <div>
+            <label className="text-sm font-medium text-muted-foreground block mb-2">Link to Goal (optional)</label>
+            <div className="flex flex-wrap gap-1.5">
+              <button onClick={() => setLinkedGoalId(null)}
+                className={cn("flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                  linkedGoalId === null ? "bg-muted text-foreground border-border" : "border-dashed border-border text-muted-foreground hover:border-primary/40"
+                )}>
+                None
+              </button>
+              {[...goals].sort((a, b) => a.name.localeCompare(b.name)).map(g => (
+                <button key={g.id} onClick={() => setLinkedGoalId(g.id === linkedGoalId ? null : g.id)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                    linkedGoalId === g.id
+                      ? "border-transparent text-white"
+                      : "border-border bg-card text-foreground hover:border-primary/40",
+                  )}
+                  style={linkedGoalId === g.id ? { backgroundColor: g.color } : undefined}>
+                  <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor: linkedGoalId === g.id ? "white" : g.color }} />
+                  <span className="truncate">{g.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="flex gap-2 pt-1">
           <Button label="Cancel" onClick={onClose} variant="secondary" fullWidth />
           <Button label={initial ? "Save" : "Add Category"} onClick={save} variant="primary" fullWidth />
