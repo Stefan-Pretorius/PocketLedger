@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo } from "react";
 import { useStore } from "../store";
-import { formatCurrency, monthName, currentMonth, today, monthlyIncomeAmount, monthlyRecurringAmount, dayOfWeekLabel, formatRecurringSchedule, getBudgetDateRange } from "../utils";
+import { formatCurrency, formatDate, monthName, currentMonth, today, monthlyIncomeAmount, monthlyRecurringAmount, dayOfWeekLabel, formatRecurringSchedule, getBudgetDateRange } from "../utils";
 import { Colors } from "../theme";
 import {
   Card, Button, Input, Modal, EmptyState, SectionHeader,
@@ -9,7 +9,7 @@ import {
 import { PageHeader } from "../components/Layout";
 import { BudgetYearTabs, BudgetMonthGrid } from "../components/BudgetPicker";
 import {
-  Plus, Trash2, Edit2, Wallet, RefreshCw, ToggleLeft, ToggleRight, CalendarClock, Copy, ChevronDown, Repeat, Tag, MoveRight, AlertTriangle, Target,
+  Plus, Trash2, Edit2, Wallet, RefreshCw, ToggleLeft, ToggleRight, CalendarClock, Copy, ChevronDown, Repeat, Tag, MoveRight, AlertTriangle, Target, Printer,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -141,27 +141,43 @@ function CategoryModal({
   visible, onClose, budgetId, initial,
 }: {
   visible: boolean; onClose: () => void; budgetId: number;
-  initial?: { id: number; name: string; allocatedAmount: number; color: string; icon: string; isRounding?: boolean; linkedGoalId?: number };
+  initial?: { id: number; name: string; allocatedAmount: number; color: string; icon: string; isRounding?: boolean; linkedGoalId?: number; frequency?: "monthly" | "fortnightly" | "weekly"; sectionId?: number };
 }) {
-  const { createCategory, updateCategory, goals } = useStore();
+  const { createCategory, updateCategory, goals, budgetSections: rawBudgetSections, createBudgetSection } = useStore();
+  const budgetSections = rawBudgetSections ?? [];
   const [name, setName] = useState(initial?.name ?? "");
   const [amount, setAmount] = useState(String(initial?.allocatedAmount ?? ""));
+  const [frequency, setFrequency] = useState<"monthly" | "fortnightly" | "weekly">(initial?.frequency ?? "monthly");
   const [isRounding, setIsRounding] = useState(initial?.isRounding ?? false);
   const [color, setColor] = useState(initial?.color ?? Colors.categoryColors[0]);
   const [linkedGoalId, setLinkedGoalId] = useState<number | null>(initial?.linkedGoalId ?? null);
+  const [sectionId, setSectionId] = useState<number | null>(initial?.sectionId ?? null);
+  const [showNewSection, setShowNewSection] = useState(false);
+  const [newSectionName, setNewSectionName] = useState("");
+
+  const availableSections = budgetSections.filter(s => s.budgetId === budgetId).sort((a, b) => a.sortOrder - b.sortOrder);
 
   const save = () => {
     const amt = isRounding ? 0 : parseFloat(amount);
     if (!name.trim()) { toast.error("Category name is required"); return; }
     if (!isRounding && (isNaN(amt) || amt < 0)) { toast.error("Enter a valid amount"); return; }
+    const freq = isRounding ? undefined : frequency;
     if (initial) {
-      updateCategory(initial.id, { name, allocatedAmount: amt, color, isRounding, linkedGoalId: linkedGoalId ?? undefined });
+      updateCategory(initial.id, { name, allocatedAmount: amt, color, isRounding, linkedGoalId: linkedGoalId ?? undefined, frequency: freq, sectionId: sectionId ?? undefined });
       toast.success("Category updated");
     } else {
-      createCategory({ budgetId, name, allocatedAmount: amt, color, icon: "wallet", isRounding, linkedGoalId: linkedGoalId ?? undefined });
+      createCategory({ budgetId, name, allocatedAmount: amt, color, icon: "wallet", isRounding, linkedGoalId: linkedGoalId ?? undefined, frequency: freq, sectionId: sectionId ?? undefined });
       toast.success("Category added");
     }
     onClose();
+  };
+
+  const addSection = () => {
+    if (!newSectionName.trim()) return;
+    const sec = createBudgetSection({ budgetId, name: newSectionName.trim(), sortOrder: availableSections.length });
+    setSectionId(sec.id);
+    setNewSectionName("");
+    setShowNewSection(false);
   };
 
   return (
@@ -170,6 +186,26 @@ function CategoryModal({
         <Input label="Category Name" value={name} onChange={setName} placeholder="e.g. Groceries" autoFocus />
         {!isRounding && (
           <Input label="Allocated Amount" value={amount} onChange={setAmount} type="number" prefix="$" placeholder="0.00" />
+        )}
+        {!isRounding && (
+          <div>
+            <label className="text-sm font-medium text-muted-foreground block mb-2">Frequency</label>
+            <div className="flex gap-2">
+              {(["weekly", "fortnightly", "monthly"] as const).map(f => (
+                <button key={f} onClick={() => setFrequency(f)}
+                  className={cn("px-4 py-2 rounded-full text-sm font-medium transition-colors",
+                    frequency === f ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80",
+                  )}>
+                  {f === "fortnightly" ? "Fortnightly" : f === "weekly" ? "Weekly" : "Monthly"}
+                </button>
+              ))}
+            </div>
+            {frequency !== "monthly" && parseFloat(amount) > 0 && (
+              <p className="text-xs text-muted-foreground mt-1">
+                ≈ {formatCurrency(frequency === "weekly" ? (parseFloat(amount) * 52 / 12) : (parseFloat(amount) * 26 / 12))}/mo
+              </p>
+            )}
+          </div>
         )}
         {/* Round-up savings toggle */}
         <button
@@ -205,6 +241,41 @@ function CategoryModal({
         <div>
           <label className="text-sm font-medium text-muted-foreground block mb-2">Color</label>
           <ColorPicker value={color} onChange={setColor} colors={Colors.categoryColors} />
+        </div>
+        <div>
+          <label className="text-sm font-medium text-muted-foreground block mb-2">Section (optional)</label>
+          {availableSections.length === 0 && !showNewSection && (
+            <p className="text-xs text-muted-foreground mb-2">No sections yet — add one below.</p>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => setSectionId(null)}
+              className={cn("px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                sectionId === null ? "bg-muted text-foreground border-border" : "border-dashed border-border text-muted-foreground hover:border-primary/40"
+              )}>
+              None
+            </button>
+            {availableSections.map(s => (
+              <button key={s.id} onClick={() => setSectionId(s.id === sectionId ? null : s.id)}
+                className={cn("px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                  sectionId === s.id ? "bg-primary text-primary-foreground border-primary" : "border-border bg-card text-foreground hover:border-primary/40"
+                )}>
+                {s.name}
+              </button>
+            ))}
+          </div>
+          {!showNewSection ? (
+            <button onClick={() => setShowNewSection(true)} className="text-xs text-primary hover:underline mt-2">
+              + New Section
+            </button>
+          ) : (
+            <div className="flex gap-2 mt-2">
+              <input type="text" value={newSectionName} onChange={e => setNewSectionName(e.target.value)}
+                placeholder="Section name"
+                className="flex-1 px-3 py-1.5 rounded-lg border border-border bg-card text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+              <button onClick={addSection} className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium">Add</button>
+              <button onClick={() => setShowNewSection(false)} className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium">Cancel</button>
+            </div>
+          )}
         </div>
         {!isRounding && goals.length > 0 && (
           <div>
@@ -308,10 +379,11 @@ function IncomeSourceModal({
 // ─── Recurring Modal ──────────────────────────────────────────────────────────
 
 function RecurringModal({ visible, onClose, initial }: { visible: boolean; onClose: () => void; initial?: RecurringExpense }) {
-  const { createRecurring, updateRecurring, accounts } = useStore();
+  const { createRecurring, updateRecurring, createGoal, accounts, goals } = useStore();
   const [description, setDescription] = useState(initial?.description ?? "");
   const [amount, setAmount] = useState(String(initial?.amount ?? ""));
   const [categoryName, setCategoryName] = useState(initial?.categoryName ?? "");
+  const [goalId, setGoalId] = useState<number | null>(initial?.goalId ?? null);
   const [frequency, setFrequency] = useState<PayFrequency>(initial?.frequency ?? "monthly");
   const [dayOfMonth, setDayOfMonth] = useState(String(initial?.dayOfMonth ?? "1"));
   const [dayOfWeek, setDayOfWeek] = useState(initial?.dayOfWeek ?? 1);
@@ -319,16 +391,38 @@ function RecurringModal({ visible, onClose, initial }: { visible: boolean; onClo
   const [accountId, setAccountId] = useState<number | null>(initial?.accountId ?? null);
   const [merchant, setMerchant] = useState(initial?.merchant ?? "");
   const [notes, setNotes] = useState(initial?.notes ?? "");
+  const isGoalMode = goalId != null;
+  const [showNewGoal, setShowNewGoal] = useState(false);
+  const [newGoalName, setNewGoalName] = useState("");
+  const [newGoalTarget, setNewGoalTarget] = useState("");
+  const [newGoalColor, setNewGoalColor] = useState(Colors.categoryColors[0]);
+  const [savingGoal, setSavingGoal] = useState(false);
+
+  const handleCreateGoal = async () => {
+    if (!newGoalName.trim()) { toast.error("Goal name is required"); return; }
+    setSavingGoal(true);
+    const targetAmount = newGoalTarget.trim() ? parseFloat(newGoalTarget) : undefined;
+    if (newGoalTarget.trim() && (isNaN(targetAmount!) || targetAmount! <= 0)) { toast.error("Invalid target amount"); setSavingGoal(false); return; }
+    const goal = createGoal({ name: newGoalName.trim(), targetAmount, color: newGoalColor, icon: "target" });
+    setGoalId(goal.id);
+    setShowNewGoal(false);
+    setNewGoalName("");
+    setNewGoalTarget("");
+    setNewGoalColor(Colors.categoryColors[0]);
+    setSavingGoal(false);
+    toast.success(`Goal "${goal.name}" created`);
+  };
 
   const save = () => {
     const amt = parseFloat(amount);
     if (!description.trim()) { toast.error("Description is required"); return; }
-    if (!categoryName.trim()) { toast.error("Category name is required"); return; }
+    if (!isGoalMode && !categoryName.trim()) { toast.error("Category name is required"); return; }
     if (isNaN(amt) || amt <= 0) { toast.error("Enter a valid amount"); return; }
     const payload = {
       description,
       amount: amt,
-      categoryName,
+      categoryName: isGoalMode ? "" : categoryName,
+      goalId: goalId ?? undefined,
       frequency,
       dayOfMonth: frequency === "monthly" ? Math.min(Math.max(parseInt(dayOfMonth) || 1, 1), 31) : undefined,
       dayOfWeek: frequency !== "monthly" ? dayOfWeek : undefined,
@@ -359,7 +453,9 @@ function RecurringModal({ visible, onClose, initial }: { visible: boolean; onClo
           </p>
         </div>
         <Input label="Description" value={description} onChange={setDescription} placeholder="e.g. Netflix, Groceries" autoFocus />
-        <Input label="Category Name" value={categoryName} onChange={setCategoryName} placeholder="e.g. Subscriptions" />
+        {!isGoalMode && (
+          <Input label="Category Name" value={categoryName} onChange={setCategoryName} placeholder="e.g. Subscriptions" />
+        )}
         <Input label="Amount (per occurrence)" value={amount} onChange={setAmount} type="number" prefix="$" placeholder="0.00" />
         <div>
           <label className="text-sm font-medium text-muted-foreground block mb-2">Frequency</label>
@@ -397,6 +493,51 @@ function RecurringModal({ visible, onClose, initial }: { visible: boolean; onClo
             <p className="text-xs text-muted-foreground mt-1">First known payment date — used to align the fortnightly cycle.</p>
           </div>
         )}
+        <div>
+          <label className="text-sm font-medium text-muted-foreground block mb-2">
+            {isGoalMode ? "Or link to a Budget Category" : "Or link to a Savings Goal"}
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            <button onClick={() => setGoalId(null)}
+              className={cn("flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                goalId === null ? "bg-muted text-foreground border-border" : "border-dashed border-border text-muted-foreground hover:border-primary/40"
+              )}>
+              {isGoalMode ? "Switch to Category" : "None"}
+            </button>
+            {goals.map(g => (
+              <button key={g.id} onClick={() => setGoalId(g.id === goalId ? null : g.id)}
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                  goalId === g.id
+                    ? "border-transparent text-white"
+                    : "border-border bg-card text-foreground hover:border-primary/40",
+                )}
+                style={goalId === g.id ? { backgroundColor: g.color } : undefined}>
+                <span className={goalId === g.id ? "text-white" : "text-muted-foreground"}>⭐</span>
+                <span className="truncate">{g.name}</span>
+              </button>
+            ))}
+            <button onClick={() => setShowNewGoal(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-dashed border-border text-muted-foreground hover:border-primary/40 hover:text-primary transition-colors">
+              <Plus size={12} /> Goal
+            </button>
+          </div>
+          {showNewGoal && (
+            <div className="mt-3 p-3 rounded-xl border border-border bg-muted/20 space-y-3">
+              <p className="text-xs font-semibold text-foreground">New Savings Goal</p>
+              <Input placeholder="Goal name" value={newGoalName} onChange={setNewGoalName} autoFocus />
+              <Input placeholder="Target (optional)" value={newGoalTarget} onChange={setNewGoalTarget} type="number" prefix="$" />
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">Color</label>
+                <ColorPicker value={newGoalColor} onChange={setNewGoalColor} colors={Colors.categoryColors} />
+              </div>
+              <div className="flex gap-2">
+                <Button label={savingGoal ? "Creating…" : "Create Goal"} onClick={handleCreateGoal} variant="primary" size="sm" loading={savingGoal} />
+                <Button label="Cancel" onClick={() => setShowNewGoal(false)} variant="secondary" size="sm" />
+              </div>
+            </div>
+          )}
+        </div>
         <AccountPicker accounts={accounts} value={accountId} onChange={setAccountId} label="Paid From Account" />
         <Input label="Merchant (optional)" value={merchant} onChange={setMerchant} placeholder="e.g. Netflix" />
         <Input label="Notes (optional)" value={notes} onChange={setNotes} multiline placeholder="Any notes…" />
@@ -569,7 +710,8 @@ function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
 }) {
   const { goals } = useStore();
   const linkedGoal = cat.linkedGoalId ? goals.find((g: any) => g.id === cat.linkedGoalId) : null;
-  const pct = cat.allocatedAmount > 0 ? (cat.spent ?? 0) / cat.allocatedAmount : 0;
+  const effectiveMonthly = cat.frequency === "weekly" ? (cat.allocatedAmount * 52 / 12) : cat.frequency === "fortnightly" ? (cat.allocatedAmount * 26 / 12) : cat.allocatedAmount;
+  const pct = effectiveMonthly > 0 ? (cat.spent ?? 0) / effectiveMonthly : 0;
   const over = pct > 1;
   const isExpanded = expandedCategory === cat.id;
   const catExpenses = expenses.filter(
@@ -583,6 +725,8 @@ function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-sm font-medium text-foreground inline-flex items-center gap-1.5">
               {cat.name}
+              {cat.frequency === "fortnightly" && <span className="text-[10px] text-muted-foreground/60 font-normal">/fn</span>}
+              {cat.frequency === "weekly" && <span className="text-[10px] text-muted-foreground/60 font-normal">/wk</span>}
               {recurring && <CalendarClock size={11} className="text-primary" />}
               {linkedGoal && <Target size={11} style={{ color: linkedGoal.color }} />}
             </span>
@@ -594,11 +738,14 @@ function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
             )}
             <div className="flex items-center gap-1.5">
               <span className={cn("text-xs font-medium flex items-center gap-1", over ? "text-destructive" : "text-muted-foreground")}>
-                <span>{formatCurrency(cat.spent ?? 0)} / {formatCurrency(cat.allocatedAmount)}</span>
+                <span>{formatCurrency(cat.spent ?? 0)} / {formatCurrency(cat.allocatedAmount)}{cat.frequency === "fortnightly" ? <span className="text-[10px] text-muted-foreground/60">/fn</span> : cat.frequency === "weekly" ? <span className="text-[10px] text-muted-foreground/60">/wk</span> : null}</span>
                 {over && (
                   <span className="text-destructive/70 text-[10px] font-semibold whitespace-nowrap">
-                    (+{formatCurrency((cat.spent ?? 0) - cat.allocatedAmount)}, {Math.round((pct - 1) * 100)}%)
+                    (+{formatCurrency((cat.spent ?? 0) - effectiveMonthly)}, {Math.round((pct - 1) * 100)}%)
                   </span>
+                )}
+                {cat.frequency !== "monthly" && !over && (
+                  <span className="text-[10px] text-muted-foreground/60">≈{formatCurrency(effectiveMonthly)}/mo</span>
                 )}
               </span>
               <button onClick={(e) => { e.stopPropagation(); handleConvertToRecurring(cat); }} className="p-1 rounded-lg hover:bg-muted text-muted-foreground" title="Convert to recurring expense"><Repeat size={12} /></button>
@@ -749,19 +896,22 @@ function RoundingCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
 
 // ─── Recurring Row ────────────────────────────────────────────────────────────
 
-function RecurringRow({ rec, accountName, onEdit, onDelete, onToggle, onConvert }: {
-  rec: RecurringExpense; accountName?: string; onEdit: () => void; onDelete: () => void; onToggle: () => void; onConvert?: () => void;
+function RecurringRow({ rec, accountName, goalName, goalColor, onEdit, onDelete, onToggle, onConvert }: {
+  rec: RecurringExpense; accountName?: string; goalName?: string; goalColor?: string; onEdit: () => void; onDelete: () => void; onToggle: () => void; onConvert?: () => void;
 }) {
+  const isGoalLinked = rec.goalId != null;
   return (
     <Card padding={false} className={cn("px-4 py-3", !rec.isActive && "opacity-60")}>
       <div className="flex items-center gap-3">
-        <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0", rec.isActive ? "bg-primary/10" : "bg-muted")}>
-          <CalendarClock size={15} className={rec.isActive ? "text-primary" : "text-muted-foreground"} />
+        <div className={cn("w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0", isGoalLinked ? "bg-yellow-100 dark:bg-yellow-900/30" : rec.isActive ? "bg-primary/10" : "bg-muted")}>
+          <CalendarClock size={15} className={isGoalLinked ? "text-yellow-600 dark:text-yellow-400" : rec.isActive ? "text-primary" : "text-muted-foreground"} />
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-foreground truncate">{rec.description}</p>
           <p className="text-xs text-muted-foreground">
-            {rec.categoryName} · {formatRecurringSchedule(rec)}
+            {isGoalLinked
+              ? <><span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ backgroundColor: goalColor ?? "var(--chart-2)" }} />{goalName ?? "Goal"}</span> · {formatRecurringSchedule(rec)}</>
+              : <>{rec.categoryName} · {formatRecurringSchedule(rec)}</>}
             {accountName && <> · {accountName}</>}
           </p>
         </div>
@@ -782,15 +932,287 @@ function RecurringRow({ rec, accountName, onEdit, onDelete, onToggle, onConvert 
   );
 }
 
+// ─── Section Rules ────────────────────────────────────────────────────────────
+
+const SECTION_KEYWORDS: [string, string][] = [
+  ["fuel|petrol|diesel|uber|taxi|lyft|bus|train|metro|tram|parking|toll|car|auto|transport|ride|drive", "Transport"],
+  ["grocery|supermarket|coles|woolworths|aldi|iga|food|dining|restaurant|cafe|takeaway|mcdonald|kfc|pizza|sushi|bakery|eat", "Food"],
+  ["rent|mortgage|lease|property|housing", "Housing"],
+  ["electricity|energy|power|gas|water|utility|bill|internet|nbn|phone|mobile|telstra|optus|vodafone", "Utilities"],
+  ["netflix|spotify|apple|google|amazon|disney|youtube|hulu|patreon|subscription", "Subscriptions"],
+  ["insuranc|aami|allianz|bupa|medibank|nib", "Insurance"],
+  ["doctor|medical|dentist|pharmacy|chemist|hospital|clinic|health|physio|gym|fitness", "Health"],
+  ["clothing|fashion|target|kmart|big w|ikea|home|furniture|decor|bunnings|hardware|kogan|catch", "Shopping"],
+  ["cinema|movie|game|hobby|book|music|concert|event|festival", "Entertainment"],
+  ["flight|airbnb|hotel|travel|holiday|vacation|accommodation|booking|hostel", "Travel"],
+  ["invest|super|share|stock|etf|dividend|crypto|index", "Investments"],
+];
+
+// ─── Budget Print Modal ─────────────────────────────────────────────────────────
+
+function BudgetPrintModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const { goals, categories, recurring, budgetSections: rawBudgetSections, accounts, activeBudgetId, getBudgetSummary } = useStore();
+  const budgetSections = rawBudgetSections ?? [];
+  const summary = activeBudgetId ? getBudgetSummary(activeBudgetId) : null;
+  const activeBudget = summary?.budget;
+  if (!summary || !activeBudget) return null;
+  const { startDate, endDate } = getBudgetDateRange(activeBudget);
+  const sectionLookup = new Map(budgetSections.map(s => [s.id, s]));
+  const goalLookup = new Map(goals.map(g => [g.id, g]));
+  const budgetCats = summary.categories.filter((c: any) => !c.isRounding);
+  const roundingCats = summary.categories.filter((c: any) => c.isRounding);
+
+  const bySection: Record<string, typeof budgetCats> = {};
+  for (const cat of budgetCats) {
+    const secName = cat.sectionId != null ? (sectionLookup.get(cat.sectionId)?.name ?? "Other") : "Other";
+    if (!bySection[secName]) bySection[secName] = [];
+    bySection[secName].push(cat);
+  }
+  const sectionKeys = Object.keys(bySection).sort((a, b) => a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b));
+
+  const catMonthly = (c: any) => c.frequency === "weekly" ? (c.allocatedAmount * 52 / 12) : c.frequency === "fortnightly" ? (c.allocatedAmount * 26 / 12) : c.allocatedAmount;
+
+  return (
+    <Modal visible={visible} onClose={onClose} title="" maxWidth="5xl">
+      <style>{`
+        @media print {
+          body * { visibility: hidden; }
+          #budget-print-content, #budget-print-content * { visibility: visible; }
+          #budget-print-content { position: absolute; left: 0; top: 0; width: 100%; padding: 0.5in; }
+          .print-hide { display: none !important; }
+          @page { margin: 0.5in; }
+        }
+      `}</style>
+      <div id="budget-print-content">
+        {/* ── Print action bar ── */}
+        <div className="print-hide flex items-center justify-between mb-4">
+          <p className="text-sm text-muted-foreground">Budget print preview</p>
+          <div className="flex gap-2">
+            <Button label="Print" onClick={() => window.print()} variant="primary" icon={Printer} />
+            <Button label="Close" onClick={onClose} variant="secondary" />
+          </div>
+        </div>
+
+        {/* ── Budget Header ── */}
+        <div className="mb-4">
+          <h1 className="text-lg font-bold text-foreground">{activeBudget.name}</h1>
+          <p className="text-sm text-muted-foreground">{monthName(activeBudget.month)} {activeBudget.year} · {formatDate(startDate)} → {formatDate(endDate)}</p>
+        </div>
+
+        {/* ── Summary Stats ── */}
+        <div className="grid grid-cols-4 gap-3 mb-4">
+          <div className="bg-muted rounded-lg p-2">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Income</p>
+            <p className="text-sm font-bold text-foreground">{formatCurrency(summary.totalIncome)}</p>
+          </div>
+          <div className="bg-muted rounded-lg p-2">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Allocated</p>
+            <p className="text-sm font-bold text-foreground">{formatCurrency(summary.totalAllocated)}</p>
+          </div>
+          <div className="bg-muted rounded-lg p-2">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Unallocated</p>
+            <p className="text-sm font-bold" style={{ color: summary.unallocated >= 0 ? "var(--success)" : "var(--danger)" }}>{formatCurrency(summary.unallocated)}</p>
+          </div>
+          <div className="bg-muted rounded-lg p-2">
+            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Spent</p>
+            <p className="text-sm font-bold text-foreground">{formatCurrency(summary.totalSpent)}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground mb-4">
+          {summary.incomeFromSources > 0 && <span>From income: {formatCurrency(summary.incomeFromSources)}</span>}
+          {summary.carryover > 0 && <span>Carryover: {formatCurrency(summary.carryover)}</span>}
+          {summary.totalRoundingSaved > 0 && <span>Round-up saved: {formatCurrency(summary.totalRoundingSaved)}</span>}
+          {summary.uncategorizedTotal > 0 && <span>Uncategorized: {formatCurrency(summary.uncategorizedTotal)}</span>}
+          <span>Remaining: {formatCurrency(summary.totalIncome - summary.totalSpent)}</span>
+        </div>
+
+        {/* ── Income Sources ── */}
+        {summary.incomeSources.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-xs font-bold text-foreground uppercase tracking-wider mb-2">Income Sources</h2>
+            <div className="divide-y divide-border">
+              {summary.incomeSources.map(s => {
+                const acct = accounts.find(a => a.id === s.accountId);
+                return (
+                  <div key={s.id} className="flex items-center justify-between py-1.5 text-sm">
+                    <span className="text-foreground">{s.name}</span>
+                    <span className="text-muted-foreground">{formatCurrency(s.amount)}/{s.frequency === "monthly" ? "mo" : "fn"}{acct ? ` · ${acct.name}` : ""}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── Goals ── */}
+        {goals.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-xs font-bold text-foreground uppercase tracking-wider mb-2">Savings Goals</h2>
+            <div className="space-y-2">
+              {goals.map(g => {
+                const hasTarget = g.targetAmount != null && g.targetAmount > 0;
+                const pct = hasTarget ? g.currentAmount / g.targetAmount! : 0;
+                const linkedCats = categories.filter(c => c.linkedGoalId === g.id);
+                const linkedRecurring = recurring.filter(r => r.goalId === g.id);
+                return (
+                  <div key={g.id} className="border border-border rounded-lg p-2.5">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: g.color }} />
+                        <span className="text-sm font-semibold text-foreground">{g.name}</span>
+                      </div>
+                      <span className="text-sm font-medium text-foreground">{formatCurrency(g.currentAmount)}{hasTarget ? ` / ${formatCurrency(g.targetAmount!)}` : ""}</span>
+                    </div>
+                    {hasTarget && (
+                      <div className="h-1.5 rounded-full bg-muted overflow-hidden mb-1">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pct * 100, 100)}%`, backgroundColor: g.color }} />
+                      </div>
+                    )}
+                    {(linkedCats.length > 0 || linkedRecurring.length > 0) && (
+                      <div className="text-[10px] text-muted-foreground mt-1 space-y-0.5">
+                        {linkedCats.length > 0 && <p>Categories: {linkedCats.map(c => c.name).join(", ")}</p>}
+                        {linkedRecurring.length > 0 && <p>Recurring: {linkedRecurring.map(r => r.description).join(", ")}</p>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── Budget Categories by Section ── */}
+        {budgetCats.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-xs font-bold text-foreground uppercase tracking-wider mb-2">Budget Categories</h2>
+            <div className="space-y-3">
+              {sectionKeys.map(sec => {
+                const cats = bySection[sec];
+                const secTotal = cats.reduce((s: number, c: any) => s + catMonthly(c), 0);
+                const secSpent = cats.reduce((s: number, c: any) => s + (c.spent ?? 0), 0);
+                return (
+                  <div key={sec}>
+                    <div className="flex items-center justify-between mb-1">
+                      <h3 className="text-xs font-semibold text-foreground">{sec}</h3>
+                      <span className="text-[10px] text-muted-foreground">alloc {formatCurrency(secTotal)} · spent {formatCurrency(secSpent)}</span>
+                    </div>
+                    <div className="space-y-1">
+                      {cats.map((cat: any) => {
+                        const monthly = catMonthly(cat);
+                        const spent = cat.spent ?? 0;
+                        const pct = monthly > 0 ? spent / monthly : 0;
+                        const overBudget = monthly > 0 && spent > monthly;
+                        const linkedGoal = cat.linkedGoalId != null ? goalLookup.get(cat.linkedGoalId) : null;
+                        return (
+                          <div key={cat.id} className="flex items-center gap-2 py-1">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color }} />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-foreground font-medium truncate">{cat.name}{cat.frequency && cat.frequency !== "monthly" ? cat.frequency === "weekly" ? " /wk" : " /fn" : ""}</span>
+                                <span className="text-xs" style={{ color: overBudget ? "var(--danger)" : "var(--foreground)" }}>
+                                  {formatCurrency(monthly)} alloc
+                                  {monthly > 0 && <> · {formatCurrency(spent)} spent</>}
+                                </span>
+                              </div>
+                              {monthly > 0 && (
+                                <div className="h-1 rounded-full bg-muted overflow-hidden mt-0.5">
+                                  <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pct * 100, 100)}%`, backgroundColor: overBudget ? "var(--danger)" : cat.color }} />
+                                </div>
+                              )}
+                              {linkedGoal && (
+                                <p className="text-[9px] text-muted-foreground mt-0.5">⭐ Linked: {linkedGoal.name}</p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── Uncategorized Expenses ── */}
+        {summary.uncategorizedTotal > 0 && (
+          <div className="mb-4">
+            <h2 className="text-xs font-bold text-foreground uppercase tracking-wider mb-2">Uncategorized Expenses</h2>
+            <p className="text-xs text-muted-foreground">{formatCurrency(summary.uncategorizedTotal)} total</p>
+          </div>
+        )}
+
+        {/* ── Round-up Savings ── */}
+        {roundingCats.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-xs font-bold text-foreground uppercase tracking-wider mb-2">Round-up Savings</h2>
+            <div className="space-y-1">
+              {roundingCats.map((cat: any) => {
+                const linkedGoal = cat.linkedGoalId != null ? goalLookup.get(cat.linkedGoalId) : null;
+                return (
+                  <div key={cat.id} className="flex items-center gap-2 py-0.5 text-sm">
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color }} />
+                    <span className="text-foreground">{cat.name}</span>
+                    <span className="text-muted-foreground text-xs">· saved {formatCurrency(cat.spent ?? 0)}</span>
+                    {linkedGoal && <span className="text-muted-foreground text-xs">· ⭐ {linkedGoal.name}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── Recurring Templates ── */}
+        {recurring.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-xs font-bold text-foreground uppercase tracking-wider mb-2">Recurring Templates</h2>
+            <div className="space-y-1">
+              {recurring.filter(r => r.isActive).map(r => {
+                const linkedGoal = r.goalId != null ? goalLookup.get(r.goalId) : null;
+                return (
+                  <div key={r.id} className="flex items-center justify-between py-1 text-sm">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-foreground truncate">{r.description}</span>
+                      <span className="text-muted-foreground text-xs whitespace-nowrap">
+                        {linkedGoal
+                          ? <><span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: linkedGoal.color }} /> {linkedGoal.name}</>
+                          : r.categoryName}
+                        · {formatRecurringSchedule(r)}
+                      </span>
+                    </div>
+                    <span className="text-foreground font-medium ml-2">{formatCurrency(r.amount)}/{r.frequency === "weekly" ? "wk" : r.frequency === "fortnightly" ? "fn" : "mo"}</span>
+                  </div>
+                );
+              })}
+              {recurring.filter(r => !r.isActive).length > 0 && (
+                <>
+                  <p className="text-[10px] text-muted-foreground mt-2 mb-1">Paused</p>
+                  {recurring.filter(r => !r.isActive).map(r => (
+                    <div key={r.id} className="flex items-center justify-between py-0.5 text-sm opacity-60">
+                      <span className="text-foreground truncate">{r.description}</span>
+                      <span className="text-foreground font-medium ml-2">{formatCurrency(r.amount)}/{r.frequency === "weekly" ? "wk" : "fn"}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export function BudgetPage() {
   const {
     budgets, activeBudgetId, setActiveBudget, getBudgetSummary, getSuggestedCarryover,
-    categories, expenses, recurring, accounts,
+    categories, expenses, recurring, accounts, goals, budgetSections,
     deleteCategory, deleteBudget, deleteIncomeSource, deleteRecurring,
     updateRecurring, applyRecurring, copyBudget, updateBudget,
     createCategory, createRecurring, updateExpense,
+    createBudgetSection, updateCategory,
   } = useStore();
 
   const cm = currentMonth();
@@ -812,8 +1234,11 @@ export function BudgetPage() {
   const [editRecurring, setEditRecurring] = useState<RecurringExpense | null>(null);
   const [applyResult, setApplyResult] = useState<{ applied: number; skipped: number; unmatched: string[] } | null>(null);
   const [showCopy, setShowCopy] = useState(false);
+  const [showPrint, setShowPrint] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<{ type: "budget" | "category" | "income" | "recurring"; id: number } | null>(null);
+  const [filterCategoryId, setFilterCategoryId] = useState<number | "uncategorized" | null>(null);
 
+  const safeBudgetSections = budgetSections ?? [];
   const summary = activeBudgetId ? getBudgetSummary(activeBudgetId) : null;
   const activeBudget = summary?.budget;
   const suggestedCarryover = activeBudgetId ? getSuggestedCarryover(activeBudgetId) : null;
@@ -821,7 +1246,11 @@ export function BudgetPage() {
   const budgetDateRange = summary?.budget ? getBudgetDateRange(summary.budget) : null;
   const budgetExpenses = budgetDateRange ? expenses.filter(
     e => e.budgetId === activeBudgetId && e.date >= budgetDateRange.startDate && e.date <= budgetDateRange.endDate && e.isWithdrawal !== true,
-  ) : [];
+  ).filter(e => {
+    if (filterCategoryId === "uncategorized") return e.categoryId == null;
+    if (filterCategoryId != null) return e.categoryId === filterCategoryId;
+    return true;
+  }) : [];
 
   const openAddIncome = (defaultName?: string) => {
     setEditIncome(null);
@@ -876,6 +1305,31 @@ export function BudgetPage() {
     toast.success(`"${rec.description}" converted to a budget category`);
   };
 
+  const handleOrganizeSections = () => {
+    if (!activeBudgetId) return;
+    const cats = categories.filter(c => c.budgetId === activeBudgetId && c.sectionId == null && !c.isRounding);
+    let assigned = 0;
+    for (const cat of cats) {
+      const lower = cat.name.toLowerCase();
+      let match: string | null = null;
+      for (const [keywords, sectionName] of SECTION_KEYWORDS) {
+        if (keywords.split("|").some(kw => lower.includes(kw))) {
+          match = sectionName;
+          break;
+        }
+      }
+      if (!match) continue;
+      let sec = safeBudgetSections.find(s => s.budgetId === activeBudgetId && s.name === match);
+      if (!sec) {
+        sec = createBudgetSection({ budgetId: activeBudgetId, name: match, sortOrder: safeBudgetSections.filter(s => s.budgetId === activeBudgetId).length });
+      }
+      updateCategory(cat.id, { sectionId: sec.id });
+      assigned++;
+    }
+    if (assigned > 0) toast.success(`Organized ${assigned} categor${assigned === 1 ? "y" : "ies"} into sections`);
+    else toast.info("No unorganized categories found");
+  };
+
   const openCreateForMonth = (month: number, year: number) => {
     setNewBudgetDefaults({ month, year });
     setShowNewBudget(true);
@@ -917,6 +1371,7 @@ export function BudgetPage() {
                   <p className="text-sm text-muted-foreground">{monthName(activeBudget.month)} {activeBudget.year}</p>
                 </div>
                 <div className="flex gap-1">
+                  <button onClick={() => setShowPrint(true)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground" title="Print budget"><Printer size={14} /></button>
                   <button onClick={() => setShowCopy(true)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground" title="Copy to new month"><Copy size={14} /></button>
                   <button onClick={() => setEditBudget(activeBudget)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"><Edit2 size={14} /></button>
                   <button onClick={() => setConfirmDelete({ type: "budget", id: activeBudget.id })} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"><Trash2 size={14} /></button>
@@ -964,14 +1419,15 @@ export function BudgetPage() {
 
             {/* Budget Health */}
             {(() => {
+              const catMonthly = (c: any) => c.frequency === "weekly" ? (c.allocatedAmount * 52 / 12) : c.frequency === "fortnightly" ? (c.allocatedAmount * 26 / 12) : c.allocatedAmount;
               const budgetCats = summary.categories.filter((c: any) => !c.isRounding);
-              const overCats = budgetCats.filter((c: any) => c.allocatedAmount > 0 && (c.spent ?? 0) > c.allocatedAmount);
+              const overCats = budgetCats.filter((c: any) => catMonthly(c) > 0 && (c.spent ?? 0) > catMonthly(c));
               if (overCats.length === 0) return null;
-              const totalOverspend = overCats.reduce((s: number, c: any) => s + (c.spent ?? 0) - c.allocatedAmount, 0);
-              const avgOverPct = Math.round(overCats.reduce((s: number, c: any) => s + (((c.spent ?? 0) / c.allocatedAmount) - 1), 0) / overCats.length * 100);
-              const healthyCount = budgetCats.filter((c: any) => c.allocatedAmount > 0 && (c.spent ?? 0) <= c.allocatedAmount).length;
-              const healthPct = budgetCats.filter((c: any) => c.allocatedAmount > 0).length > 0
-                ? healthyCount / budgetCats.filter((c: any) => c.allocatedAmount > 0).length : 0;
+              const totalOverspend = overCats.reduce((s: number, c: any) => s + (c.spent ?? 0) - catMonthly(c), 0);
+              const avgOverPct = Math.round(overCats.reduce((s: number, c: any) => s + (((c.spent ?? 0) / catMonthly(c)) - 1), 0) / overCats.length * 100);
+              const healthyCount = budgetCats.filter((c: any) => catMonthly(c) > 0 && (c.spent ?? 0) <= catMonthly(c)).length;
+              const healthPct = budgetCats.filter((c: any) => catMonthly(c) > 0).length > 0
+                ? healthyCount / budgetCats.filter((c: any) => catMonthly(c) > 0).length : 0;
               return (
                 <Card>
                   <div className="flex items-start gap-3">
@@ -1125,38 +1581,100 @@ export function BudgetPage() {
               </Card>
             </div>
 
+            {/* Category Filter */}
+            <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-thin pb-1 mb-3 -mx-1 px-1">
+              <button
+                onClick={() => setFilterCategoryId(null)}
+                className={cn(
+                  "flex-shrink-0 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
+                  filterCategoryId === null ? "bg-foreground text-background border-foreground" : "bg-card text-muted-foreground border-border hover:border-muted-foreground/30",
+                )}
+              >
+                All
+              </button>
+              {summary.categories.filter((c: any) => !c.isRounding).sort((a: any, b: any) => a.name.localeCompare(b.name)).map((cat: any) => (
+                <button
+                  key={cat.id}
+                  onClick={() => setFilterCategoryId(filterCategoryId === cat.id ? null : cat.id)}
+                  className={cn(
+                    "flex-shrink-0 flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
+                    filterCategoryId === cat.id ? "text-foreground border-foreground" : "text-muted-foreground border-border hover:border-muted-foreground/30",
+                  )}
+                  style={filterCategoryId === cat.id ? { backgroundColor: cat.color + "20", borderColor: cat.color } : {}}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.color }} />
+                  {cat.name}
+                </button>
+              ))}
+              {summary.uncategorizedTotal > 0 && (
+                <button
+                  onClick={() => setFilterCategoryId(filterCategoryId === "uncategorized" ? null : "uncategorized")}
+                  className={cn(
+                    "flex-shrink-0 flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
+                    filterCategoryId === "uncategorized" ? "bg-warning/20 text-warning border-warning" : "text-muted-foreground border-border hover:border-warning/50",
+                  )}
+                >
+                  <span className="w-2 h-2 rounded-full bg-warning" />
+                  Uncategorized
+                </button>
+              )}
+            </div>
+
             {/* Budget Categories */}
             <div>
               <SectionHeader title="Budget Categories" action={{ label: "+ Add", onPress: () => setShowNewCat(true) }} />
+              <div className="flex justify-end -mt-2 mb-2">
+                <button onClick={handleOrganizeSections} className="text-[11px] text-primary hover:underline">
+                  Auto-organize sections
+                </button>
+              </div>
               {(() => {
                 const budgetCats = summary.categories.filter(c => !c.isRounding);
                 if (budgetCats.length === 0) return (
                   <EmptyState icon={Wallet} title="No categories" subtitle="Add categories to organize your spending."
                     action={{ label: "Add Category", onPress: () => setShowNewCat(true) }} />
                 );
-                const recCats = [...budgetCats.filter(c => recurring.some(r => r.categoryName?.toLowerCase() === c.name.toLowerCase()))].sort((a, b) => a.name.localeCompare(b.name));
-                const oneoffCats = [...budgetCats.filter(c => !recurring.some(r => r.categoryName?.toLowerCase() === c.name.toLowerCase()))].sort((a, b) => a.name.localeCompare(b.name));
+                const sectionLookup = new Map(safeBudgetSections.map(s => [s.id, s]));
+                const bySection: Record<string, typeof budgetCats> = {};
+                for (const cat of budgetCats) {
+                  const secName = cat.sectionId != null ? (sectionLookup.get(cat.sectionId)?.name ?? "Other") : "Other";
+                  if (!bySection[secName]) bySection[secName] = [];
+                  bySection[secName].push(cat);
+                }
+                const sectionKeys = Object.keys(bySection).sort((a, b) => a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b));
                 return (
-                  <div className="space-y-2">
-                    {recCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={true}
-                      activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
-                      expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
-                      movingExpense={movingExpense} setMovingExpense={setMovingExpense}
-                      movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
-                      setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
-                    {recCats.length > 0 && oneoffCats.length > 0 && (
-                      <div className="flex items-center gap-3 pt-2 pb-1">
-                        <div className="h-px flex-1 bg-border" />
-                        <span className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider">One-off</span>
-                        <div className="h-px flex-1 bg-border" />
-                      </div>
-                    )}
-                    {oneoffCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={false}
-                      activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
-                      expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
-                      movingExpense={movingExpense} setMovingExpense={setMovingExpense}
-                      movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
-                      setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
+                  <div className="space-y-4">
+                    {sectionKeys.map(sec => {
+                      const cats = bySection[sec];
+                      const recCats = cats.filter(c => recurring.some(r => r.categoryName?.toLowerCase() === c.name.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name));
+                      const oneoffCats = cats.filter(c => !recurring.some(r => r.categoryName?.toLowerCase() === c.name.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name));
+                      return (
+                        <div key={sec}>
+                          <SectionHeader title={sec} />
+                          <div className="space-y-2">
+                            {recCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={true}
+                              activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
+                              expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
+                              movingExpense={movingExpense} setMovingExpense={setMovingExpense}
+                              movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
+                              setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
+                            {recCats.length > 0 && oneoffCats.length > 0 && (
+                              <div className="flex items-center gap-3 pt-1 pb-1">
+                                <div className="h-px flex-1 bg-border" />
+                                <span className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider">One-off</span>
+                                <div className="h-px flex-1 bg-border" />
+                              </div>
+                            )}
+                            {oneoffCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={false}
+                              activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
+                              expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
+                              movingExpense={movingExpense} setMovingExpense={setMovingExpense}
+                              movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
+                              setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })()}
@@ -1309,6 +1827,8 @@ export function BudgetPage() {
                       {activeRecurring.map(rec => (
                         <RecurringRow key={rec.id} rec={rec}
                           accountName={accounts.find(a => a.id === rec.accountId)?.name}
+                          goalName={goals.find(g => g.id === rec.goalId)?.name}
+                          goalColor={goals.find(g => g.id === rec.goalId)?.color}
                           onEdit={() => setEditRecurring(rec)}
                           onDelete={() => setConfirmDelete({ type: "recurring", id: rec.id })}
                           onToggle={() => updateRecurring(rec.id, { isActive: false })}
@@ -1323,6 +1843,8 @@ export function BudgetPage() {
                         {inactiveRecurring.map(rec => (
                           <RecurringRow key={rec.id} rec={rec}
                             accountName={accounts.find(a => a.id === rec.accountId)?.name}
+                            goalName={goals.find(g => g.id === rec.goalId)?.name}
+                            goalColor={goals.find(g => g.id === rec.goalId)?.color}
                             onEdit={() => setEditRecurring(rec)}
                             onDelete={() => setConfirmDelete({ type: "recurring", id: rec.id })}
                             onToggle={() => updateRecurring(rec.id, { isActive: true })}
@@ -1357,6 +1879,7 @@ export function BudgetPage() {
       <RecurringModal visible={showNewRecurring} onClose={() => setShowNewRecurring(false)} />
       {editRecurring && <RecurringModal visible onClose={() => setEditRecurring(null)} initial={editRecurring} />}
       <ApplyResultModal visible={!!applyResult} onClose={() => setApplyResult(null)} result={applyResult} />
+      <BudgetPrintModal visible={showPrint} onClose={() => setShowPrint(false)} />
       <CopyBudgetModal
         visible={showCopy}
         onClose={() => setShowCopy(false)}

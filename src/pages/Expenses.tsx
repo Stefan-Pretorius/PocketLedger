@@ -16,7 +16,7 @@ function ExpenseModal({
   visible, onClose, budgetId, initial,
 }: {
   visible: boolean; onClose: () => void; budgetId: number;
-  initial?: { id: number; description: string; amount: number; date: string; categoryId?: number | null; goalId?: number | null; isWithdrawal?: boolean; accountId?: number; merchant?: string; notes?: string };
+  initial?: { id: number; description: string; amount: number; date: string; categoryId?: number | null; goalId?: number | null; isWithdrawal?: boolean; fundedByGoalId?: number | null; accountId?: number; merchant?: string; notes?: string };
 }) {
   const { createExpense, updateExpense, updateGoal, categories, accounts, goals } = useStore();
   const budgetCats = categories.filter(c => c.budgetId === budgetId);
@@ -26,6 +26,7 @@ function ExpenseModal({
   const [categoryId, setCategoryId] = useState<number | null>(initial?.goalId && !initial?.isWithdrawal ? null : (initial?.categoryId ?? budgetCats[0]?.id ?? null));
   const [goalId, setGoalId] = useState<number | null>(initial?.goalId ?? null);
   const [withdraw, setWithdraw] = useState(initial?.isWithdrawal ?? false);
+  const [fundedByGoalId, setFundedByGoalId] = useState<number | null>(initial?.fundedByGoalId ?? null);
   const [accountId, setAccountId] = useState<number | null>(initial?.accountId ?? null);
   const [merchant, setMerchant] = useState(initial?.merchant ?? "");
   const [notes, setNotes] = useState(initial?.notes ?? "");
@@ -122,6 +123,7 @@ function ExpenseModal({
         categoryId: isGoalMode && withdraw ? undefined : (categoryId ?? undefined),
         goalId: isGoalMode ? goalId : undefined,
         isWithdrawal: isGoalMode ? withdraw : undefined,
+        fundedByGoalId: isGoalMode ? undefined : (fundedByGoalId ?? undefined),
         accountId: accountId ?? undefined, merchant, notes,
       });
       toast.success("Expense updated");
@@ -137,7 +139,7 @@ function ExpenseModal({
       }
       toast.success(withdraw ? `Withdrew ${formatCurrency(amt)} from "${goal?.name ?? "Goal"}"` : `Added ${formatCurrency(amt)} to "${goal?.name ?? "Goal"}"`);
     } else {
-      createExpense({ budgetId, description: desc, amount: amt, date, categoryId: categoryId ?? undefined, accountId: accountId ?? undefined, merchant, notes, importedFromBank: false });
+      createExpense({ budgetId, description: desc, amount: amt, date, categoryId: categoryId ?? undefined, accountId: accountId ?? undefined, merchant, notes, importedFromBank: false, fundedByGoalId: fundedByGoalId ?? undefined });
       toast.success("Expense added");
     }
     onClose();
@@ -189,7 +191,7 @@ function ExpenseModal({
                 return (
                   <button
                     key={g.id}
-                    onClick={() => { setGoalId(selected ? null : g.id); if (!selected) setCategoryId(null); }}
+                    onClick={() => { setGoalId(selected ? null : g.id); if (!selected) { setCategoryId(null); setFundedByGoalId(null); } }}
                     className={cn(
                       "flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium border transition-colors",
                       selected
@@ -218,6 +220,32 @@ function ExpenseModal({
                 <Repeat size={12} />
                 {withdraw ? "Withdrawal" : "Contribution"}
               </button>
+            )}
+            {!isGoalMode && (
+              <div className="mt-2">
+                <label className="text-xs text-muted-foreground block mb-1.5">Funded by Goal (optional)</label>
+                <div className="flex flex-wrap gap-1.5">
+                  <button onClick={() => setFundedByGoalId(null)}
+                    className={cn("flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium border transition-colors",
+                      fundedByGoalId === null ? "bg-muted text-foreground border-border" : "border-dashed border-border text-muted-foreground hover:border-primary/40"
+                    )}>
+                    None
+                  </button>
+                  {goals.map(g => (
+                    <button key={g.id} onClick={() => setFundedByGoalId(g.id === fundedByGoalId ? null : g.id)}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium border transition-colors",
+                        fundedByGoalId === g.id
+                          ? "border-transparent text-white"
+                          : "border-border bg-card text-foreground hover:border-primary/40",
+                      )}
+                      style={fundedByGoalId === g.id ? { backgroundColor: g.color } : undefined}>
+                      <span className={fundedByGoalId === g.id ? "text-white" : "text-muted-foreground"}>💰</span>
+                      <span className="truncate">{g.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
         )}
@@ -645,6 +673,7 @@ export function ExpensesPage() {
                     const cat = budgetCats.find(c => c.id === exp.categoryId);
                     const acc = accounts.find(a => a.id === exp.accountId);
                     const goal = goals.find(g => g.id === exp.goalId);
+                    const fundedByGoal = exp.fundedByGoalId != null ? goals.find(g => g.id === exp.fundedByGoalId) : undefined;
                     return (
                       <div
                         key={exp.id}
@@ -661,17 +690,18 @@ export function ExpensesPage() {
                         />
                         <div
                           className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-                          style={{ backgroundColor: goal ? (goal.color + "20") : ((cat?.color ?? Colors.primary) + "20") }}
+                          style={{ backgroundColor: fundedByGoal ? (fundedByGoal.color + "20") : (goal ? (goal.color + "20") : ((cat?.color ?? Colors.primary) + "20")) }}
                         >
-                          {goal && exp.isWithdrawal ? <Repeat size={14} style={{ color: goal.color }} /> : goal ? <Target size={14} style={{ color: goal.color }} /> : <Receipt size={14} style={{ color: cat?.color ?? Colors.primary }} />}
+                          {fundedByGoal ? <Target size={14} style={{ color: fundedByGoal.color }} /> : (goal && exp.isWithdrawal ? <Repeat size={14} style={{ color: goal.color }} /> : goal ? <Target size={14} style={{ color: goal.color }} /> : <Receipt size={14} style={{ color: cat?.color ?? Colors.primary }} />)}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-foreground truncate">{exp.description}</p>
                           <div className="flex items-center gap-2 mt-0.5">
-                            {goal && <ColorDot color={goal.color} size={6} />}
-                            {!goal && cat && <ColorDot color={cat.color} size={6} />}
+                            {fundedByGoal && <ColorDot color={fundedByGoal.color} size={6} />}
+                            {!fundedByGoal && goal && <ColorDot color={goal.color} size={6} />}
+                            {!fundedByGoal && !goal && cat && <ColorDot color={cat.color} size={6} />}
                             <span className="text-xs text-muted-foreground">
-                              {goal ? `→ ${goal.name}` : (cat?.name ?? "Uncategorized")} · {formatDate(exp.date)}
+                              {goal ? `→ ${goal.name}` : (fundedByGoal ? `💰 ${fundedByGoal.name}` : (cat?.name ?? "Uncategorized"))} · {formatDate(exp.date)}
                             </span>
                             {exp.importedFromBank && (
                               <Badge label="Bank" color={Colors.primary} variant="soft"  />
@@ -684,6 +714,9 @@ export function ExpensesPage() {
                             )}
                             {goal && exp.isWithdrawal && (
                               <Badge label="Withdrawn" color={goal.color} variant="soft" icon={Repeat} />
+                            )}
+                            {fundedByGoal && (
+                              <Badge label={fundedByGoal.name} color={fundedByGoal.color} variant="soft" />
                             )}
                             {acc && (
                               <Badge label={acc.name} color={Colors.warning} variant="soft"  />

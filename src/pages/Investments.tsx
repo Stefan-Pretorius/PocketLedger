@@ -1012,7 +1012,7 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
   const [excluded, setExcluded] = useState<Set<number>>(() => {
     return new Set(summaries.filter(s => s.holding.type === "crypto").map(s => s.holding.id));
   });
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   const updateConfig = (id: number, patch: Partial<PerHoldingConfig>) => {
     setSavedConfigs(prev => {
@@ -1249,6 +1249,36 @@ export function InvestmentsPage() {
                   <p className="text-lg font-bold" style={{ color: s.color }}>{s.value}</p>
                 </Card>
               ))}
+            </div>
+
+            {/* By type summary */}
+            <div>
+              <SectionHeader title="By Type" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {(["crypto", "etf", "managed_fund", "stock", "super", "other"] as const).map(type => {
+                  const TypeIcon = HOLDING_TYPE_ICONS[type];
+                  const items = portfolio.holdingSummaries.filter(s => s.holding.type === type);
+                  if (items.length === 0) return null;
+                  const totalValue = items.reduce((s, h) => s + h.marketValue, 0);
+                  const totalInvested = items.reduce((s, h) => s + h.totalInvested, 0);
+                  const pnl = totalValue - totalInvested;
+                  const pnlPct = totalInvested > 0 ? (pnl / totalInvested) * 100 : 0;
+                  return (
+                    <Card key={type} className="px-4 py-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <TypeIcon size={14} className="text-muted-foreground" />
+                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{HOLDING_TYPE_LABELS[type]}</span>
+                        <span className="text-[10px] text-muted-foreground/60 ml-auto">{items.length} {items.length === 1 ? "holding" : "holdings"}</span>
+                      </div>
+                      <p className="text-sm font-bold text-foreground">{formatCurrency(totalValue)}</p>
+                      <p className="text-[10px] text-muted-foreground/70">Invested {formatCurrency(totalInvested)}</p>
+                      <p className={cn("text-[11px] font-medium mt-0.5", pnl >= 0 ? "text-success" : "text-destructive")}>
+                        {pnl >= 0 ? "+" : ""}{formatCurrency(pnl)} ({pnl >= 0 ? "+" : ""}{pnlPct.toFixed(1)}%)
+                      </p>
+                    </Card>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Millionaire projection */}

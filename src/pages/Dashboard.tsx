@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import { useStore } from "../store";
-import { formatCurrency, monthName, currentMonth, getBudgetDateRange } from "../utils";
+import { formatCurrency, monthName, currentMonth, getBudgetDateRange, monthlyCategoryAmount } from "../utils";
 import { Colors } from "../theme";
 import { Card, ProgressBar, SectionHeader, EmptyState, ColorDot } from "../components/ui";
 import { PageHeader } from "../components/Layout";
@@ -72,7 +72,7 @@ function StatCard({ label, value, icon: Icon, color, sub }: {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export function Dashboard() {
-  const { budgets, activeBudgetId, setActiveBudget, getBudgetSummary, getPortfolioSummary, expenses, goals, convertCategoryToGoal, convertGoalToCategory, categories } = useStore();
+  const { budgets, activeBudgetId, setActiveBudget, getBudgetSummary, getPortfolioSummary, expenses, goals, convertCategoryToGoal, convertGoalToCategory, categories, budgetSections } = useStore();
   const cm = currentMonth();
   const [selectedYear, setSelectedYear] = useState(cm.year);
   const [newBudgetDefaults, setNewBudgetDefaults] = useState<{ month: number; year: number } | null>(null);
@@ -105,6 +105,8 @@ export function Dashboard() {
     try { return getPortfolioSummary(); } catch { return null; }
   }, [getPortfolioSummary, holdings]);
 
+  const [chartView, setChartView] = useState<"category" | "section">("category");
+
   // Category spending segments for donut (exclude rounding categories)
   const spendingSegments = useMemo(() =>
     (summary?.categories ?? [])
@@ -112,6 +114,30 @@ export function Dashboard() {
       .map(c => ({ label: c.name, value: c.spent ?? 0, color: c.color })),
     [summary],
   );
+
+  // Section-aggregated spending segments
+  const sectionLookup = useMemo(() => new Map(budgetSections.map(s => [s.id, s])), [budgetSections]);
+  const sectionSegments = useMemo(() => {
+    const bySection = new Map<string, { label: string; value: number; color: string }>();
+    for (const c of summary?.categories ?? []) {
+      if (c.isRounding || !(c.spent ?? 0)) continue;
+      const sec = c.sectionId != null ? sectionLookup.get(c.sectionId) : undefined;
+      const key = sec ? `sec-${sec.id}` : "other";
+      const existing = bySection.get(key);
+      if (existing) {
+        existing.value += c.spent ?? 0;
+      } else {
+        bySection.set(key, {
+          label: sec?.name ?? "Other",
+          value: c.spent ?? 0,
+          color: sec?.color ?? "#94a3b8",
+        });
+      }
+    }
+    return [...bySection.values()].sort((a, b) => b.value - a.value);
+  }, [summary, sectionLookup]);
+
+  const activeSegments = chartView === "section" ? sectionSegments : spendingSegments;
 
   // Month-over-month trend: last 6 months spending
   const trendData = useMemo(() => {
@@ -152,14 +178,21 @@ export function Dashboard() {
         ) : (
           <>
             {/* Heading for selected budget */}
-            {activeBudget && (
-              <p className="text-lg font-bold text-foreground">
-                {activeBudget.name}
-                <span className="text-sm font-normal text-muted-foreground ml-2">
-                  {monthName(activeBudget.month)} {activeBudget.year}
-                </span>
-              </p>
-            )}
+            {activeBudget && (() => {
+              const dr = getBudgetDateRange(activeBudget);
+              const fmt = (d: string) => {
+                const dt = new Date(d + "T00:00:00");
+                return `${dt.getDate()} ${monthName(dt.getMonth() + 1)}`;
+              };
+              return (
+                <p className="text-lg font-bold text-foreground">
+                  {activeBudget.name}
+                  <span className="text-sm font-normal text-muted-foreground ml-2">
+                    {fmt(dr.startDate)} – {fmt(dr.endDate)}
+                  </span>
+                </p>
+              );
+            })()}
 
             {/* Stats */}
             <div className="grid grid-cols-2 gap-3">
@@ -180,12 +213,12 @@ export function Dashboard() {
             </div>
 
             {/* Spending Insights */}
-            {spendingSegments.length > 0 && (
+            {activeSegments.length > 0 && (
               <Card>
                 <div className="flex items-start gap-4">
                   {/* Donut */}
                   <div className="relative w-28 h-28 flex-shrink-0">
-                    <DonutChart segments={spendingSegments} />
+                    <DonutChart segments={activeSegments} />
                     <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                       <span className="text-xs font-bold text-foreground leading-tight">
                         {formatCurrency(summary.totalSpent).replace("A$", "$")}
@@ -195,9 +228,15 @@ export function Dashboard() {
                   </div>
                   {/* Compact legend */}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-foreground mb-2">Spending by Category</p>
+                    <div className="flex items-center gap-2 mb-2">
+                      <p className="text-sm font-semibold text-foreground">Spending</p>
+                      <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
+                        <button onClick={() => setChartView("category")} className={cn("px-2 py-0.5 rounded text-[10px] font-medium transition-colors", chartView === "category" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}>By Category</button>
+                        <button onClick={() => setChartView("section")} className={cn("px-2 py-0.5 rounded text-[10px] font-medium transition-colors", chartView === "section" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}>By Section</button>
+                      </div>
+                    </div>
                     <div className="flex flex-wrap gap-x-3 gap-y-1.5">
-                      {[...spendingSegments].sort((a, b) => b.value - a.value).map(s => {
+                      {[...activeSegments].sort((a, b) => b.value - a.value).map(s => {
                         const pct = summary.totalSpent > 0 ? Math.round((s.value / summary.totalSpent) * 100) : 0;
                         return (
                           <div key={s.label} className="flex items-center gap-1.5 text-xs">
@@ -242,125 +281,166 @@ export function Dashboard() {
             )}
 
             {/* Category breakdown bars */}
-            {summary.categories.length > 0 && (
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <SectionHeader title="Category Budgets" />
-                  <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
-                    <button onClick={() => setView("cards")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "cards" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Card view"><LayoutGrid size={14} /></button>
-                    <button onClick={() => setView("compact")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "compact" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Compact grid"><LayoutGrid size={12} className="scale-75" /></button>
-                    <button onClick={() => setView("list")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "list" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="List view"><List size={14} /></button>
+            {summary.categories.length > 0 && (() => {
+              const budgetCats = summary.categories.filter(c => !c.isRounding);
+              const bySection: Record<string, typeof budgetCats> = {};
+              for (const cat of budgetCats) {
+                const secName = cat.sectionId != null ? (sectionLookup.get(cat.sectionId)?.name ?? "Other") : "Other";
+                if (!bySection[secName]) bySection[secName] = [];
+                bySection[secName].push(cat);
+              }
+              const sectionKeys = Object.keys(bySection).sort((a, b) => a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b));
+              return (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <SectionHeader title="Category Budgets" />
+                    <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
+                      <button onClick={() => setView("cards")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "cards" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Card view"><LayoutGrid size={14} /></button>
+                      <button onClick={() => setView("compact")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "compact" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Compact grid"><LayoutGrid size={12} className="scale-75" /></button>
+                      <button onClick={() => setView("list")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "list" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="List view"><List size={14} /></button>
+                    </div>
                   </div>
-                </div>
-
-                {viewMode === "cards" && (
-                  <div className="space-y-2">
-                    {[...summary.categories].sort((a, b) => a.name.localeCompare(b.name)).map(cat => {
-                      const pct = cat.allocatedAmount > 0 ? (cat.spent ?? 0) / cat.allocatedAmount : 0;
-                      const over = pct > 1;
-                      return (
-                        <Card key={cat.id} padding={false} className="px-4 py-3">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <ColorDot color={cat.color} size={10} />
-                              <span className="text-sm font-medium text-foreground truncate">{cat.name}</span>
-                            </div>
-                            <span className={cn("text-xs font-medium flex-shrink-0 ml-2", over ? "text-destructive" : "text-muted-foreground")}>
-                              {formatCurrency(cat.spent ?? 0)} / {formatCurrency(cat.allocatedAmount)}
-                              {over && (
-                                <span className="ml-1 text-destructive/70 text-[10px] font-semibold">
-                                  (+{Math.round((pct - 1) * 100)}%)
-                                </span>
-                              )}
-                            </span>
-                            <button
-                              onClick={() => { convertCategoryToGoal(cat.id); toast.success(`"${cat.name}" converted to goal`); }}
-                              className="flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground/40 hover:text-primary hover:bg-primary/10 transition-colors ml-1"
-                              title="Convert to goal"
-                            >
-                              <ArrowUpDown size={12} />
-                            </button>
+                  {sectionKeys.map(secName => {
+                    const cats = bySection[secName];
+                    return (
+                      <div key={secName} className="mb-4">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">{secName}</p>
+                        {viewMode === "cards" && (
+                          <div className="space-y-2">
+                            {cats.sort((a, b) => a.name.localeCompare(b.name)).map(cat => {
+                              const monthly = monthlyCategoryAmount(cat.allocatedAmount, cat.frequency);
+                              const pct = monthly > 0 ? (cat.spent ?? 0) / monthly : 0;
+                              const over = pct > 1;
+                              return (
+                                <Card key={cat.id} padding={false} className="px-4 py-3">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <ColorDot color={cat.color} size={10} />
+                                      <span className="text-sm font-medium text-foreground truncate">
+                                        {cat.name}
+                                        {cat.frequency === "weekly" && <span className="text-[10px] text-muted-foreground/60 font-normal">/wk</span>}
+                                        {cat.frequency === "fortnightly" && <span className="text-[10px] text-muted-foreground/60 font-normal">/fn</span>}
+                                      </span>
+                                    </div>
+                                    <span className={cn("text-xs font-medium flex-shrink-0 ml-2", over ? "text-destructive" : "text-muted-foreground")}>
+                                      {formatCurrency(cat.spent ?? 0)} / {formatCurrency(monthly)}
+                                      {over && (
+                                        <span className="ml-1 text-destructive/70 text-[10px] font-semibold">
+                                          (+{Math.round((pct - 1) * 100)}%)
+                                        </span>
+                                      )}
+                                    </span>
+                                    <button
+                                      onClick={() => { convertCategoryToGoal(cat.id); toast.success(`"${cat.name}" converted to goal`); }}
+                                      className="flex-shrink-0 w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground/40 hover:text-primary hover:bg-primary/10 transition-colors ml-1"
+                                      title="Convert to goal"
+                                    >
+                                      <ArrowUpDown size={12} />
+                                    </button>
+                                  </div>
+                                  <ProgressBar value={pct} color={over ? Colors.danger : cat.color} height={6} />
+                                </Card>
+                              );
+                            })}
                           </div>
-                          <ProgressBar value={pct} color={over ? Colors.danger : cat.color} height={6} />
-                        </Card>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {viewMode === "compact" && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    {[...summary.categories].sort((a, b) => a.name.localeCompare(b.name)).map(cat => {
-                      const pct = cat.allocatedAmount > 0 ? (cat.spent ?? 0) / cat.allocatedAmount : 0;
-                      const over = pct > 1;
-                      return (
-                        <div key={cat.id} className="bg-card border border-border rounded-lg px-3 py-2 min-w-0 group">
-                          <div className="flex items-center justify-between gap-1 mb-1">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <ColorDot color={cat.color} size={7} />
-                              <span className="text-xs font-medium text-foreground truncate">{cat.name}</span>
-                            </div>
-                            <div className="flex items-center gap-0.5">
-                              <span className={cn("text-[11px] font-medium flex-shrink-0", over ? "text-destructive" : "text-muted-foreground")}>
-                                {formatCurrency(cat.spent ?? 0)} / {formatCurrency(cat.allocatedAmount)}
-                                {over && (
-                                  <span className="ml-0.5 text-destructive/70 text-[10px] font-semibold">
-                                    (+{Math.round((pct - 1) * 100)}%)
+                        )}
+                        {viewMode === "compact" && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                            {cats.sort((a, b) => a.name.localeCompare(b.name)).map(cat => {
+                              const monthly = monthlyCategoryAmount(cat.allocatedAmount, cat.frequency);
+                              const pct = monthly > 0 ? (cat.spent ?? 0) / monthly : 0;
+                              const over = pct > 1;
+                              return (
+                                <div key={cat.id} className="bg-card border border-border rounded-lg px-3 py-2 min-w-0 group">
+                                  <div className="flex items-center justify-between gap-1 mb-1">
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <ColorDot color={cat.color} size={7} />
+                                      <span className="text-xs font-medium text-foreground truncate">
+                                        {cat.name}
+                                        {cat.frequency === "weekly" && <span className="text-[10px] text-muted-foreground/60 font-normal">/wk</span>}
+                                        {cat.frequency === "fortnightly" && <span className="text-[10px] text-muted-foreground/60 font-normal">/fn</span>}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-0.5">
+                                      <span className={cn("text-[11px] font-medium flex-shrink-0", over ? "text-destructive" : "text-muted-foreground")}>
+                                        {formatCurrency(cat.spent ?? 0)} / {formatCurrency(monthly)}
+                                        {over && (
+                                          <span className="ml-0.5 text-destructive/70 text-[10px] font-semibold">
+                                            (+{Math.round((pct - 1) * 100)}%)
+                                          </span>
+                                        )}
+                                      </span>
+                                      <button
+                                        onClick={() => { convertCategoryToGoal(cat.id); toast.success(`"${cat.name}" converted to goal`); }}
+                                        className="flex-shrink-0 w-5 h-5 rounded flex items-center justify-center text-muted-foreground/30 hover:text-primary hover:bg-primary/10 transition-colors"
+                                        title="Convert to goal"
+                                      >
+                                        <ArrowUpDown size={10} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                  <ProgressBar value={pct} color={over ? Colors.danger : cat.color} height={4} />
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {viewMode === "list" && (
+                          <Card padding={false}>
+                            {cats.sort((a, b) => a.name.localeCompare(b.name)).map((cat, i) => {
+                              const monthly = monthlyCategoryAmount(cat.allocatedAmount, cat.frequency);
+                              const pct = monthly > 0 ? (cat.spent ?? 0) / monthly : 0;
+                              const over = pct > 1;
+                              return (
+                                <div key={cat.id} className={cn("flex items-center gap-2 px-3 py-2", i < cats.length - 1 && "border-b border-border")}>
+                                  <ColorDot color={cat.color} size={6} />
+                                  <span className="text-xs font-medium text-foreground truncate flex-1 min-w-0">
+                                    {cat.name}
+                                    {cat.frequency === "weekly" && <span className="text-[10px] text-muted-foreground/60 font-normal">/wk</span>}
+                                    {cat.frequency === "fortnightly" && <span className="text-[10px] text-muted-foreground/60 font-normal">/fn</span>}
                                   </span>
-                                )}
-                              </span>
-                              <button
-                                onClick={() => { convertCategoryToGoal(cat.id); toast.success(`"${cat.name}" converted to goal`); }}
-                                className="flex-shrink-0 w-5 h-5 rounded flex items-center justify-center text-muted-foreground/30 hover:text-primary hover:bg-primary/10 transition-colors"
-                                title="Convert to goal"
-                              >
-                                <ArrowUpDown size={10} />
-                              </button>
-                            </div>
-                          </div>
-                          <ProgressBar value={pct} color={over ? Colors.danger : cat.color} height={4} />
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {viewMode === "list" && (
-                  <Card padding={false}>
-                    {[...summary.categories].sort((a, b) => a.name.localeCompare(b.name)).map((cat, i) => {
-                      const pct = cat.allocatedAmount > 0 ? (cat.spent ?? 0) / cat.allocatedAmount : 0;
-                      const over = pct > 1;
-                      return (
-                        <div key={cat.id} className={cn("flex items-center gap-2 px-3 py-2", i < summary.categories.length - 1 && "border-b border-border")}>
-                          <ColorDot color={cat.color} size={6} />
-                          <span className="text-xs font-medium text-foreground truncate flex-1 min-w-0">{cat.name}</span>
-                          <div className="flex-1 max-w-32">
-                            <div className="w-full rounded-full bg-muted overflow-hidden" style={{ height: 4 }}>
-                              <div className="h-full rounded-full transition-all duration-300" style={{ width: `${Math.min(pct, 1) * 100}%`, backgroundColor: over ? Colors.danger : cat.color }} />
-                            </div>
-                          </div>
-                          <span className={cn("text-[11px] font-medium flex-shrink-0 w-24 text-right", over ? "text-destructive" : "text-muted-foreground")}>
-                            {formatCurrency(cat.spent ?? 0)} / {formatCurrency(cat.allocatedAmount)}
-                            {over && (
-                              <span className="ml-0.5 text-destructive/70 text-[10px] font-semibold">
-                                (+{Math.round((pct - 1) * 100)}%)
-                              </span>
-                            )}
-                          </span>
-                          <button
-                            onClick={() => { convertCategoryToGoal(cat.id); toast.success(`"${cat.name}" converted to goal`); }}
-                            className="flex-shrink-0 w-5 h-5 rounded flex items-center justify-center text-muted-foreground/30 hover:text-primary hover:bg-primary/10 transition-colors"
-                            title="Convert to goal"
-                          >
-                            <ArrowUpDown size={10} />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </Card>
-                )}
-              </div>
-            )}
+                                  <div className="flex-1 max-w-32">
+                                    <div className="w-full rounded-full bg-muted overflow-hidden" style={{ height: 4 }}>
+                                      <div className="h-full rounded-full transition-all duration-300" style={{ width: `${Math.min(pct, 1) * 100}%`, backgroundColor: over ? Colors.danger : cat.color }} />
+                                    </div>
+                                  </div>
+                                  <span className={cn("text-[11px] font-medium flex-shrink-0 w-24 text-right", over ? "text-destructive" : "text-muted-foreground")}>
+                                    {formatCurrency(cat.spent ?? 0)} / {formatCurrency(monthly)}
+                                    {over && (
+                                      <span className="ml-0.5 text-destructive/70 text-[10px] font-semibold">
+                                        (+{Math.round((pct - 1) * 100)}%)
+                                      </span>
+                                    )}
+                                  </span>
+                                  <button
+                                    onClick={() => { convertCategoryToGoal(cat.id); toast.success(`"${cat.name}" converted to goal`); }}
+                                    className="flex-shrink-0 w-5 h-5 rounded flex items-center justify-center text-muted-foreground/30 hover:text-primary hover:bg-primary/10 transition-colors"
+                                    title="Convert to goal"
+                                  >
+                                    <ArrowUpDown size={10} />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </Card>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {/* Round-up categories */}
+                  {summary.categories.filter(c => c.isRounding).length > 0 && (
+                    <div className="mt-4">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Round-up &amp; Savings</p>
+                      <div className="bg-success/5 border border-success/20 rounded-lg px-4 py-2">
+                        <p className="text-xs text-muted-foreground">
+                          Total saved: <span className="text-success font-medium">{formatCurrency(summary.totalRoundingSaved)}</span>
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Recent expenses */}
             {recentExpenses.length > 0 && (

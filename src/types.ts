@@ -23,11 +23,22 @@ export interface Budget {
   createdAt: string;
 }
 
+export interface BudgetSection {
+  id: number;
+  budgetId: number;
+  name: string;
+  color?: string;
+  sortOrder: number;
+  createdAt: string;
+}
+
 export interface Category {
   id: number;
   budgetId: number;
   name: string;
   allocatedAmount: number;
+  /** How often the allocatedAmount applies — "monthly" (default), "fortnightly", or "weekly" */
+  frequency?: "monthly" | "fortnightly" | "weekly";
   color: string;
   icon: string;
   createdAt: string;
@@ -36,6 +47,8 @@ export interface Category {
   isRounding?: boolean;
   /** Linked savings goal (envelope) — contributions auto-select this category, expenses in this category auto-suggest withdrawal */
   linkedGoalId?: number;
+  /** Section this category belongs to (reference to BudgetSection.id) */
+  sectionId?: number;
 }
 
 export interface Expense {
@@ -57,6 +70,8 @@ export interface Expense {
   goalId?: number;
   /** When true, this is a withdrawal from a goal (reduces currentAmount) */
   isWithdrawal?: boolean;
+  /** When set, this regular expense was funded from a goal envelope (record-keeping only, no balance change) */
+  fundedByGoalId?: number;
   createdAt: string;
   categoryName?: string;
   categoryColor?: string;
@@ -88,6 +103,8 @@ export interface RecurringExpense {
   categoryName: string;
   /** Bank account this expense is paid from */
   accountId?: number;
+  /** When set, this recurring template contributes to the goal envelope */
+  goalId?: number;
   merchant?: string;
   notes?: string;
   isActive: boolean;

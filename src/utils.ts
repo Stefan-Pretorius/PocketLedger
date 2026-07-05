@@ -45,9 +45,15 @@ export function getBudgetDateRange(budget: Pick<Budget, "month" | "year" | "star
 
 /** Convert an income source amount to its monthly equivalent for budgeting. */
 export function monthlyIncomeAmount(amount: number, frequency: "monthly" | "fortnightly"): number {
-  if (frequency === "monthly") return amount;
-  // 26 pay periods per year → average monthly
-  return (amount * 26) / 12;
+  if (frequency === "fortnightly") return (amount * 26) / 12;
+  return amount;
+}
+
+/** Convert a category allocated amount to its monthly equivalent. */
+export function monthlyCategoryAmount(amount: number, frequency?: "monthly" | "fortnightly" | "weekly"): number {
+  if (frequency === "weekly") return (amount * 52) / 12;
+  if (frequency === "fortnightly") return (amount * 26) / 12;
+  return amount;
 }
 
 /** Convert a recurring expense amount to its monthly equivalent for budgeting. */

@@ -16,6 +16,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getStatementFolderId, getClientId, getStoredToken, listStatementFiles, downloadFileContent, downloadFileAsBlob, type DriveStatementFile } from "../googledrive";
+import { getImportDirHandle, listImportFiles, pickImportFolder } from "../backup";
 
 // pdfjs worker — resolved by Vite (works in dev + local Windows builds)
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
@@ -46,6 +47,7 @@ function parseCSV(text: string): RawTx[] {
   const descIdx = colIdx(["description", "details", "narrative", "payee", "memo"]);
   const amtIdx = colIdx(["debit", "amount", "withdrawal", "debit amount"]);
   const creditIdx = colIdx(["credit", "deposit", "credit amount"]);
+  const balanceIdx = colIdx(["balance", "running balance"]);
   if (dateIdx < 0 || descIdx < 0) return [];
 
   const results: RawTx[] = [];
@@ -60,7 +62,8 @@ function parseCSV(text: string): RawTx[] {
     let date = rawDate;
     const d = new Date(rawDate);
     if (!isNaN(d.getTime())) date = d.toISOString().split("T")[0];
-    results.push({ description: desc, amount: Math.abs(amount), date });
+    const balance = balanceIdx >= 0 ? parseFloat(cols[balanceIdx]?.replace(/[^0-9.-]/g, "") ?? "") || undefined : undefined;
+    results.push({ description: desc, amount: Math.abs(amount), date, balance });
   }
   return results;
 }
@@ -688,7 +691,7 @@ function RuleForm({
 
 // ─── Import Review ────────────────────────────────────────────────────────────
 
-function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categories, goals, accounts, accountId, onAccountChange, onCreateGoal, onCreateCategory, onCreateRule, holdings, detectedAccountInfo }: {
+function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categories, goals, accounts, accountId, onAccountChange, onCreateGoal, onCreateCategory, onCreateRule, holdings, detectedAccountInfo, endingBalance, onEndingBalanceChange, currentAccountBalance }: {
   fileName: string;
   rows: ImportedTransaction[];
   onChange: (updated: ImportedTransaction[]) => void;
@@ -703,6 +706,9 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
   onCreateCategory?: () => void;
   onCreateRule?: (row: ImportedTransaction) => void;
   holdings?: { id: number; symbol: string; name: string }[];
+  endingBalance?: string;
+  onEndingBalanceChange?: (v: string) => void;
+  currentAccountBalance?: number;
   detectedAccountInfo?: { number: string; matchedAccountId?: number; matchedByName?: boolean } | null;
 }) {
   const autoCount = rows.filter(r => r.autoMatched && !r.skip && !r.isHouseholdTransfer).length;
@@ -711,6 +717,27 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
   const goalCount = rows.filter(r => !r.skip && (r.goalId !== null || r.goalWithdrawalId != null)).length;
   const transferCount = rows.filter(r => r.isHouseholdTransfer).length;
   const toImport = rows.filter(r => !r.skip && !r.isHouseholdTransfer).length;
+
+  // Compute withdrawal-merchant pairings for preview
+  const withdrawalPairs = (() => {
+    const pairs: { withdrawalIdx: number; merchantIdx: number; goalId: number }[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].goalWithdrawalId == null || rows[i].skip) continue;
+      for (let j = 0; j < rows.length; j++) {
+        if (i === j) continue;
+        const m = rows[j];
+        if (m.skip || m.isHouseholdTransfer || m.isCredit || m.transferToAccountId != null || m.incomeSourceName != null || m.holdingId != null || m.goalId != null || m.goalWithdrawalId != null) continue;
+        if (m.date !== rows[i].date) continue;
+        const ratio = Math.abs(m.amount - rows[i].amount) / Math.max(m.amount, rows[i].amount);
+        if (ratio > 0.1) continue;
+        pairs.push({ withdrawalIdx: i, merchantIdx: j, goalId: rows[i].goalWithdrawalId });
+        break;
+      }
+    }
+    return pairs;
+  })();
+  const pairedMerchantIndices = new Set(withdrawalPairs.map(p => p.merchantIdx));
+  const pairedWithdrawalIndices = new Set(withdrawalPairs.map(p => p.withdrawalIdx));
 
   const update = (i: number, patch: Partial<ImportedTransaction>) => {
     const hasAssignment = patch.categoryId != null || patch.goalId != null || patch.goalWithdrawalId != null || patch.holdingId != null || patch.incomeSourceName != null || patch.isHouseholdTransfer === true;
@@ -753,6 +780,11 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
         {goalCount > 0 && (
           <span className="flex items-center gap-1.5 bg-primary/10 text-primary text-xs font-medium px-2.5 py-1.5 rounded-full">
             <Star size={12} />{goalCount} → goal
+          </span>
+        )}
+        {withdrawalPairs.length > 0 && (
+          <span className="flex items-center gap-1.5 bg-chart-2/10 text-chart-2 text-xs font-medium px-2.5 py-1.5 rounded-full">
+            <CheckCircle2 size={12} />{withdrawalPairs.length} w/d paired
           </span>
         )}
         {needsReview > 0 && (
@@ -801,6 +833,19 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
               {" "}— select the matching account above, or{" "}
               <button onClick={() => onAccountChange(null)} className="underline text-primary">ignore</button>
             </p>
+          )}
+          {accountId != null && onEndingBalanceChange && (
+            <div className="flex items-center gap-2 mt-2">
+              <label className="text-xs text-muted-foreground flex-shrink-0">Ending balance:</label>
+              <input type="text" value={endingBalance ?? ""} onChange={e => onEndingBalanceChange(e.target.value)}
+                className="flex-1 text-xs rounded-lg border border-border bg-background px-2 py-1.5 text-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors w-28"
+                placeholder="0.00" />
+              {currentAccountBalance != null && (
+                <span className="text-[10px] text-muted-foreground">
+                  Current: {formatCurrency(currentAccountBalance)}
+                </span>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -874,6 +919,42 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
                       ) : null}
                     </div>
                   </div>
+                  {/* Show pairing indicators */}
+                  {pairedWithdrawalIndices.has(i) && (() => {
+                    const pair = withdrawalPairs.find(p => p.withdrawalIdx === i);
+                    if (!pair) return null;
+                    const merchant = rows[pair.merchantIdx];
+                    const goal = goals.find(g => g.id === pair.goalId);
+                    return (
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <span className="text-[10px] text-muted-foreground">
+                          Paired with "<span className="text-foreground font-medium">{merchant.description}</span>"
+                          {goal && <span> → funded by <span className="text-foreground font-medium">{goal.name}</span></span>}
+                        </span>
+                        <button
+                          onClick={() => update(i, { goalWithdrawalId: undefined })}
+                          className="text-[10px] text-primary hover:underline"
+                          title="Break pair and create withdrawal expense instead"
+                        >
+                          Break
+                        </button>
+                      </div>
+                    );
+                  })()}
+                  {pairedMerchantIndices.has(i) && (() => {
+                    const pair = withdrawalPairs.find(p => p.merchantIdx === i);
+                    if (!pair) return null;
+                    const wd = rows[pair.withdrawalIdx];
+                    const goal = goals.find(g => g.id === pair.goalId);
+                    return (
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <span className="text-[10px] text-muted-foreground">
+                          💰 Funded by {goal ? <span className="text-foreground font-medium">{goal.name}</span> : "goal"}
+                          {" (from "}<span className="text-foreground font-medium">{wd.description}</span>)
+                        </span>
+                      </div>
+                    );
+                  })()}
                   {row.transferToAccountId != null ? (
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <span className="text-[10px] text-muted-foreground font-medium">Transfer to:</span>
@@ -988,6 +1069,8 @@ export function StatementsPage() {
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number; goalContributions: number; transferred: number } | null>(null);
   const [parsePending, setParsePending] = useState(false);
   const [importAccountId, setImportAccountId] = useState<number | null>(null);
+  const [importEndingBalance, setImportEndingBalance] = useState<string>("");
+  const [importBalanceDate, setImportBalanceDate] = useState<string>("");
   const [detectedAccountInfo, setDetectedAccountInfo] = useState<{ number: string; matchedAccountId?: number; matchedByName?: boolean } | null>(null);
   const [deleteConfirmStmt, setDeleteConfirmStmt] = useState<ImportedStatement | null>(null);
   const [duplicateFileConfirm, setDuplicateFileConfirm] = useState<{ fileName: string; existingStmt: ImportedStatement; file: File } | null>(null);
@@ -1010,6 +1093,11 @@ export function StatementsPage() {
   const [scanning, setScanning] = useState(false);
   const [selectedDriveFiles, setSelectedDriveFiles] = useState<Set<string>>(new Set());
   const [importingFromDrive, setImportingFromDrive] = useState(false);
+
+  // Local folder import state
+  const [localFiles, setLocalFiles] = useState<Awaited<ReturnType<typeof listImportFiles>> | null>(null);
+  const [selectedLocalFiles, setSelectedLocalFiles] = useState<Set<string>>(new Set());
+  const [importingLocal, setImportingLocal] = useState(false);
 
   const proceedWithDuplicateImport = async (file: File) => {
     setDuplicateFileConfirm(null);
@@ -1062,6 +1150,9 @@ export function StatementsPage() {
       setFileName(file.name);
       setReviewRows(rows);
       setParsedTxs(txs);
+      const lastBal = [...rows].reverse().find(r => r.balance != null);
+      setImportEndingBalance(lastBal?.balance != null ? String(lastBal.balance) : "");
+      setImportBalanceDate(lastBal?.date ?? "");
     } catch (err) {
       toast.error("Failed to re-import: " + (err as Error).message);
     } finally {
@@ -1235,6 +1326,10 @@ export function StatementsPage() {
       setReviewRows(rows);
       setFileName(file.name);
       setImportResult(null);
+      // Auto-detect ending balance from last transaction with balance data
+      const lastBal = [...rows].reverse().find(r => r.balance != null);
+      setImportEndingBalance(lastBal?.balance != null ? String(lastBal.balance) : "");
+      setImportBalanceDate(lastBal?.date ?? "");
       toast.success(`Found ${txs.length} transaction${txs.length !== 1 ? "s" : ""} in ${file.name}`);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to parse file.");
@@ -1281,7 +1376,8 @@ export function StatementsPage() {
       }
     }
 
-    const result = commitImport(reviewRows, activeBudgetId, fileName, importAccountId ?? undefined);
+    const bal = parseFloat(importEndingBalance);
+    const result = commitImport(reviewRows, activeBudgetId, fileName, importAccountId ?? undefined, isNaN(bal) ? undefined : bal);
     setImportResult(result);
     setReviewRows(null);
     setImportAccountId(null);
@@ -1391,6 +1487,71 @@ export function StatementsPage() {
     setDriveFiles(null);
     setSelectedDriveFiles(new Set());
     if (imported > 0) toast.success(`Imported ${imported} file${imported !== 1 ? "s" : ""} from Drive`);
+    if (failed > 0) toast.error(`${failed} file${failed !== 1 ? "s" : ""} failed`);
+  };
+
+  // ─── Local Folder Import ──────────────────────────────────────────────────
+
+  const handleScanLocalFolder = async () => {
+    const handle = await getImportDirHandle();
+    if (!handle) { toast.error("Configure a local import folder in Settings first"); return; }
+    setLocalFiles(null);
+    const files = await listImportFiles();
+    if (files.length === 0) {
+      toast.success("No CSV/OFX/PDF files found in the folder");
+      setLocalFiles([]);
+    } else {
+      setLocalFiles(files);
+      const alreadyImportedNames = new Set(importedStatements.map(s => s.fileName.toLowerCase()));
+      const preSelected = new Set(
+        files.filter(f => !alreadyImportedNames.has(f.name.toLowerCase())).map(f => f.name),
+      );
+      setSelectedLocalFiles(preSelected);
+      toast.success(`Found ${files.length} file${files.length !== 1 ? "s" : ""}`);
+    }
+  };
+
+  const toggleLocalFile = (name: string) => {
+    setSelectedLocalFiles(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
+  const importLocalFiles = async () => {
+    if (!activeBudgetId) return;
+    setImportingLocal(true);
+    let imported = 0, failed = 0;
+    for (const fileName of selectedLocalFiles) {
+      const file = localFiles?.find(f => f.name === fileName);
+      if (!file) continue;
+      const alreadyImported = importedStatements.some(
+        s => s.fileName.toLowerCase() === fileName.toLowerCase(),
+      );
+      if (alreadyImported) { failed++; continue; }
+      try {
+        const blob = await file.handle.getFile();
+        const ext = file.ext;
+        let txs: RawTx[] | null = null;
+        if (ext === "csv") {
+          txs = parseCSV(await blob.text());
+        } else if (ext === "ofx" || ext === "qfx") {
+          txs = parseOFX(await blob.text());
+        } else if (ext === "pdf") {
+          const pdfFile = new File([blob], fileName, { type: "application/pdf" });
+          txs = await parseANZPdf(pdfFile);
+        }
+        if (!txs || txs.length === 0) { failed++; continue; }
+        const rows = previewImport(txs, activeBudgetId);
+        const result = commitImport(rows, activeBudgetId, fileName, importAccountId ?? undefined);
+        imported += result.imported;
+      } catch { failed++; }
+    }
+    setImportingLocal(false);
+    setLocalFiles(null);
+    setSelectedLocalFiles(new Set());
+    if (imported > 0) toast.success(`Imported ${imported} file${imported !== 1 ? "s" : ""} from local folder`);
     if (failed > 0) toast.error(`${failed} file${failed !== 1 ? "s" : ""} failed`);
   };
 
@@ -1524,6 +1685,67 @@ export function StatementsPage() {
               </Card>
             )}
 
+            {/* Local folder import */}
+            {!reviewRows && !importResult && (
+              <Card>
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                    <FolderPlus size={18} className="text-primary" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Import from Local Folder</p>
+                    <p className="text-xs text-muted-foreground">Read CSV/OFX/PDF files from a folder on your computer</p>
+                  </div>
+                </div>
+                {localFiles === null ? (
+                  <Button label="Scan Local Folder" onClick={handleScanLocalFolder}
+                    variant="secondary" fullWidth icon={FolderPlus} />
+                ) : (
+                  <div className="space-y-3">
+                    {localFiles.length === 0 ? (
+                      <p className="text-sm text-muted-foreground text-center py-4">No CSV/OFX/PDF files found</p>
+                    ) : (
+                      <>
+                        <div className="divide-y divide-border max-h-64 overflow-y-auto -mx-4">
+                          {localFiles.map(f => {
+                            const alreadyImported = importedStatements.some(
+                              s => s.fileName.toLowerCase() === f.name.toLowerCase(),
+                            );
+                            const checked = selectedLocalFiles.has(f.name);
+                            return (
+                              <label key={f.name} className="flex items-center gap-3 px-4 py-2 hover:bg-muted/30 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleLocalFile(f.name)}
+                                  className="rounded border-border accent-primary"
+                                />
+                                <FileText size={14} className="text-muted-foreground flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm text-foreground truncate">{f.name}</p>
+                                  <p className="text-[10px] text-muted-foreground">
+                                    .{f.ext}
+                                    {alreadyImported ? " · Already imported" : ""}
+                                  </p>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <div className="flex gap-2">
+                          <Button label={`Import Selected (${selectedLocalFiles.size})`} onClick={importLocalFiles}
+                            variant="primary" size="sm" icon={FolderPlus} loading={importingLocal}
+                            disabled={selectedLocalFiles.size === 0} />
+                          <Button label="Cancel" onClick={() => { setLocalFiles(null); setSelectedLocalFiles(new Set()); }}
+                            variant="secondary" size="sm" />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </Card>
+            )}
+
             {/* Duplicate file warning */}
             {duplicateFileConfirm && (
               <Card>
@@ -1618,6 +1840,9 @@ export function StatementsPage() {
                 holdings={holdings}
                 accountId={importAccountId}
                 onAccountChange={setImportAccountId}
+                endingBalance={importEndingBalance}
+                onEndingBalanceChange={setImportEndingBalance}
+                currentAccountBalance={importAccountId != null ? accounts.find(a => a.id === importAccountId)?.balance : undefined}
                 onCreateGoal={() => setShowQuickGoal(true)}
                 onCreateCategory={() => setShowQuickCat(true)}
                 onCreateRule={row => setRuleModalData({

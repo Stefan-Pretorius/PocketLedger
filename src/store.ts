@@ -5,7 +5,7 @@ import type {
   Holding, HoldingTransaction, HoldingSummary, PortfolioSummary,
   ImportedStatement,
 } from "./types";
-import { getBudgetDateRange, getRecurringDatesInMonth, monthlyIncomeAmount } from "./utils";
+import { getBudgetDateRange, getRecurringDatesInMonth, monthlyIncomeAmount, monthlyCategoryAmount } from "./utils";
 import { autoSaveToDir } from "./backup";
 import { getStoredToken, getClientId, uploadToDrive } from "./googledrive";
 
@@ -21,6 +21,7 @@ export interface StoreData {
   holdings: Holding[];
   holdingTransactions: HoldingTransaction[];
   importedStatements: ImportedStatement[];
+  budgetSections: BudgetSection[];
 }
 
 const STORAGE_KEY = "pocketledger_data";
@@ -47,7 +48,7 @@ function load(): StoreData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [] };
+  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [] };
 }
 
 function save(data: StoreData) {
@@ -69,7 +70,7 @@ function snapshot(s: AppState): StoreData {
     budgets: s.budgets, categories: s.categories, expenses: s.expenses,
     goals: s.goals, recurring: s.recurring, incomeSources: s.incomeSources,
     bankRules: s.bankRules, holdings: s.holdings, holdingTransactions: s.holdingTransactions,
-    importedStatements: s.importedStatements,
+    importedStatements: s.importedStatements, budgetSections: s.budgetSections,
   };
 }
 
@@ -131,6 +132,10 @@ interface AppState extends StoreData {
   updateCategory: (id: number, c: Partial<Category>) => void;
   deleteCategory: (id: number) => void;
 
+  createBudgetSection: (s: Omit<BudgetSection, "id" | "createdAt">) => BudgetSection;
+  updateBudgetSection: (id: number, s: Partial<BudgetSection>) => void;
+  deleteBudgetSection: (id: number) => void;
+
   createExpense: (e: Omit<Expense, "id" | "createdAt">) => Expense;
   updateExpense: (id: number, e: Partial<Expense>) => void;
   deleteExpense: (id: number) => void;
@@ -175,6 +180,7 @@ interface AppState extends StoreData {
     budgetId: number,
     fileName?: string,
     accountId?: number,
+    endingBalanceOverride?: number,
     driveFileId?: string,
     driveModifiedTime?: string,
   ) => { imported: number; skipped: number; goalContributions: number; transferred: number };
@@ -208,6 +214,7 @@ export const useStore = create<AppState>()((set, get) => ({
   accounts: [], budgets: [], categories: [], expenses: [], goals: [],
   recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [],
   importedStatements: [],
+  budgetSections: [],
   activeBudgetId: null, loading: true,
 
   init: () => {
@@ -246,6 +253,13 @@ export const useStore = create<AppState>()((set, get) => ({
       };
     });
 
+    // Migrate legacy categories (no frequency field — default to monthly)
+    const categories = (data.categories ?? []).map(c => {
+      if (c.frequency) return c;
+      changed = true;
+      return { ...c, frequency: "monthly" as const };
+    });
+
     // Clean up orphaned bank-imported expenses (importId doesn't match any statement)
     const stmtIds = new Set(data.importedStatements.map(s => s.id));
     let hadOrphans = false;
@@ -258,7 +272,7 @@ export const useStore = create<AppState>()((set, get) => ({
     });
     if (hadOrphans) changed = true;
 
-    const migrated = { ...data, accounts, budgets, expenses, recurring, holdings: data.holdings ?? [], holdingTransactions: data.holdingTransactions ?? [], importedStatements: data.importedStatements ?? [] };
+    const migrated = { ...data, budgetSections: data.budgetSections ?? [], accounts, budgets, categories, expenses, recurring, holdings: data.holdings ?? [], holdingTransactions: data.holdingTransactions ?? [], importedStatements: data.importedStatements ?? [] };
     if (changed) save(migrated);
     set({ ...migrated, activeBudgetId: budgets[0]?.id ?? null, loading: false });
   },
@@ -289,7 +303,7 @@ export const useStore = create<AppState>()((set, get) => ({
     const roundingCats = cats.filter(c => c.isRounding);
     const budgetCats = cats.filter(c => !c.isRounding);
     const totalRoundingSaved = roundingCats.reduce((s, c) => s + (c.spent ?? 0), 0);
-    const totalAllocated = budgetCats.reduce((s, c) => s + c.allocatedAmount, 0);
+    const totalAllocated = budgetCats.reduce((s, c) => s + monthlyCategoryAmount(c.allocatedAmount, c.frequency), 0);
     const totalSpent = budgetCats.reduce((s, c) => s + (c.spent ?? 0), 0);
     const uncategorizedTotal = budgetExpenses
       .filter(e => e.categoryId == null)
@@ -382,6 +396,25 @@ export const useStore = create<AppState>()((set, get) => ({
     set(s => ({
       categories: s.categories.filter(x => x.id !== id),
       expenses: s.expenses.filter(x => x.categoryId !== id),
+    }));
+    save(snapshot(get()));
+  },
+
+  createBudgetSection: (s) => {
+    const sec: BudgetSection = { ...s, id: nextId(), createdAt: now() };
+    const budgetSections = [...get().budgetSections, sec];
+    set({ budgetSections });
+    save({ ...snapshot(get()), budgetSections });
+    return sec;
+  },
+  updateBudgetSection: (id, patch) => {
+    set(s => ({ budgetSections: s.budgetSections.map(x => x.id === id ? { ...x, ...patch } : x) }));
+    save(snapshot(get()));
+  },
+  deleteBudgetSection: (id) => {
+    set(s => ({
+      budgetSections: s.budgetSections.filter(x => x.id !== id),
+      categories: s.categories.map(c => c.sectionId === id ? { ...c, sectionId: undefined } : c),
     }));
     save(snapshot(get()));
   },
@@ -502,7 +535,7 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   applyRecurring: (budgetId) => {
-    const { recurring, categories, expenses, budgets } = get();
+    const { recurring, categories, expenses, budgets, goals } = get();
     const budget = budgets.find(b => b.id === budgetId);
     if (!budget) return { applied: 0, skipped: 0, unmatched: [] };
 
@@ -513,36 +546,66 @@ export const useStore = create<AppState>()((set, get) => ({
     for (const rec of recurring) {
       if (!rec.isActive) continue;
 
-      const cat = budgetCats.find(
-        c => c.name.toLowerCase() === rec.categoryName.toLowerCase(),
-      );
-      if (!cat) {
-        unmatched.push(rec.description);
-        continue;
-      }
-
       const dates = getRecurringDatesInMonth(budget.year, budget.month, rec);
 
-      for (const date of dates) {
-        const alreadyExists = expenses.some(
-          e => e.budgetId === budgetId &&
-            e.categoryId === cat.id &&
-            e.description === rec.description &&
-            e.date === date,
+      if (rec.goalId != null) {
+        // Goal-linked recurring: create contribution expenses
+        const goal = goals.find(g => g.id === rec.goalId);
+        if (!goal) {
+          unmatched.push(rec.description);
+          continue;
+        }
+        for (const date of dates) {
+          const alreadyExists = expenses.some(
+            e => e.budgetId === budgetId &&
+              e.goalId === goal.id &&
+              e.description === rec.description &&
+              e.date === date,
+          );
+          if (alreadyExists) { skipped++; continue; }
+          get().createExpense({
+            budgetId,
+            description: rec.description,
+            merchant: rec.merchant,
+            amount: rec.amount,
+            date,
+            accountId: rec.accountId,
+            notes: rec.notes,
+            goalId: goal.id,
+            importedFromBank: false,
+          });
+          get().updateGoal(goal.id, { currentAmount: goal.currentAmount + rec.amount });
+          applied++;
+        }
+      } else {
+        const cat = budgetCats.find(
+          c => c.name.toLowerCase() === rec.categoryName.toLowerCase(),
         );
-        if (alreadyExists) { skipped++; continue; }
+        if (!cat) {
+          unmatched.push(rec.description);
+          continue;
+        }
+        for (const date of dates) {
+          const alreadyExists = expenses.some(
+            e => e.budgetId === budgetId &&
+              e.categoryId === cat.id &&
+              e.description === rec.description &&
+              e.date === date,
+          );
+          if (alreadyExists) { skipped++; continue; }
 
-        get().createExpense({
-          budgetId, categoryId: cat.id,
-          description: rec.description,
-          merchant: rec.merchant,
-          amount: rec.amount,
-          date,
-          accountId: rec.accountId,
-          notes: rec.notes,
-          importedFromBank: false,
-        });
-        applied++;
+          get().createExpense({
+            budgetId, categoryId: cat.id,
+            description: rec.description,
+            merchant: rec.merchant,
+            amount: rec.amount,
+            date,
+            accountId: rec.accountId,
+            notes: rec.notes,
+            importedFromBank: false,
+          });
+          applied++;
+        }
       }
     }
     return { applied, skipped, unmatched };
@@ -575,6 +638,9 @@ export const useStore = create<AppState>()((set, get) => ({
         color: cat.color,
         icon: cat.icon,
         isRounding: cat.isRounding,
+        frequency: cat.frequency,
+        sectionId: cat.sectionId,
+        linkedGoalId: cat.linkedGoalId,
       });
     }
 
@@ -755,7 +821,7 @@ export const useStore = create<AppState>()((set, get) => ({
       });
   },
 
-  commitImport: (transactions, budgetId, fileName, accountId, driveFileId, driveModifiedTime) => {
+  commitImport: (transactions, budgetId, fileName, accountId, endingBalanceOverride, driveFileId, driveModifiedTime) => {
     const { accounts, budgets } = get();
     let imported = 0, skipped = 0, goalContributions = 0, transferred = 0, goalWithdrawalCount = 0;
     let totalAmount = 0;
@@ -763,7 +829,28 @@ export const useStore = create<AppState>()((set, get) => ({
     // Generate statement ID upfront so we can link expenses to it
     const stmtId = fileName ? nextId() : undefined;
 
-    for (const tx of transactions) {
+    // Pre-pass: pair goal withdrawals with merchant transactions on same date + similar amount
+    const pairedWithdrawals = new Set<number>(); // indices of withdrawal transactions that are paired
+    const merchantToWithdrawal = new Map<number, number>(); // merchant index -> withdrawal goalId
+    for (let i = 0; i < transactions.length; i++) {
+      const tx = transactions[i];
+      if (tx.goalWithdrawalId == null || tx.skip) continue;
+      // Search for a matching merchant transaction (same date, amount within 10% tolerance)
+      for (let j = 0; j < transactions.length; j++) {
+        if (i === j) continue;
+        const m = transactions[j];
+        if (m.skip || m.isHouseholdTransfer || m.isCredit || m.transferToAccountId != null || m.incomeSourceName != null || m.holdingId != null || m.goalId != null || m.goalWithdrawalId != null) continue;
+        if (m.date !== tx.date) continue;
+        const ratio = Math.abs(m.amount - tx.amount) / Math.max(m.amount, tx.amount);
+        if (ratio > 0.1) continue; // within 10% tolerance
+        pairedWithdrawals.add(i);
+        merchantToWithdrawal.set(j, tx.goalWithdrawalId);
+        break;
+      }
+    }
+
+    for (let i = 0; i < transactions.length; i++) {
+      const tx = transactions[i];
       // Find the budget that covers this transaction's date
       const dateBudget = findBudgetForDate(tx.date, budgets);
       const txBudgetId = dateBudget?.id;
@@ -836,7 +923,18 @@ export const useStore = create<AppState>()((set, get) => ({
         continue;
       }
 
-      // Goal withdrawal: subtract from currentAmount
+      // Paired goal withdrawal: adjust goal balance silently, no expense created
+      if (tx.goalWithdrawalId != null && pairedWithdrawals.has(i)) {
+        const goal = get().goals.find(g => g.id === tx.goalWithdrawalId);
+        if (goal) {
+          get().updateGoal(tx.goalWithdrawalId, { currentAmount: Math.max(0, goal.currentAmount - tx.amount) });
+          goalWithdrawalCount++;
+          // Don't create a separate expense — the merchant will get fundedByGoalId
+        }
+        continue;
+      }
+
+      // Unpaired goal withdrawal: create isWithdrawal expense
       if (tx.goalWithdrawalId != null) {
         const goal = get().goals.find(g => g.id === tx.goalWithdrawalId);
         if (goal) {
@@ -879,6 +977,8 @@ export const useStore = create<AppState>()((set, get) => ({
           skipped++;
         }
       } else {
+        // Merchant expense: check if paired with a withdrawal
+        const fundedByGoalId = merchantToWithdrawal.get(i) ?? undefined;
         get().createExpense({
           budgetId: txBudgetId,
           categoryId: tx.categoryId ?? undefined,
@@ -888,6 +988,7 @@ export const useStore = create<AppState>()((set, get) => ({
           date: tx.date,
           importedFromBank: true,
           importId: stmtId,
+          fundedByGoalId,
         });
         imported++;
       }
@@ -910,18 +1011,25 @@ export const useStore = create<AppState>()((set, get) => ({
       if (!tx.skip) totalAmount += tx.amount;
     }
 
-    // Auto-update account balance from the last transaction's running balance
+    // Auto-update account balance from the last transaction's running balance (or explicit override)
     let endingBalance: number | undefined;
     let balanceDate: string | undefined;
     if (accountId != null) {
-      const withBalance = transactions
-        .filter(t => t.balance != null && !t.skip && !t.isHouseholdTransfer)
-        .sort((a, b) => a.date.localeCompare(b.date));
-      const last = withBalance[withBalance.length - 1];
-      if (last?.balance != null) {
-        endingBalance = last.balance;
-        balanceDate = last.date;
+      if (endingBalanceOverride != null) {
+        endingBalance = endingBalanceOverride;
+        const lastTx = [...transactions].sort((a, b) => a.date.localeCompare(b.date)).pop();
+        balanceDate = lastTx?.date;
         get().updateAccount(accountId, { balance: endingBalance });
+      } else {
+        const withBalance = transactions
+          .filter(t => t.balance != null && !t.skip && !t.isHouseholdTransfer)
+          .sort((a, b) => a.date.localeCompare(b.date));
+        const last = withBalance[withBalance.length - 1];
+        if (last?.balance != null) {
+          endingBalance = last.balance;
+          balanceDate = last.date;
+          get().updateAccount(accountId, { balance: endingBalance });
+        }
       }
     }
 
@@ -1266,6 +1374,7 @@ export const useStore = create<AppState>()((set, get) => ({
       goals: s.goals, recurring: s.recurring, incomeSources: s.incomeSources,
       bankRules: s.bankRules, holdings: s.holdings, holdingTransactions: s.holdingTransactions,
       importedStatements: s.importedStatements,
+      budgetSections: s.budgetSections,
       exportedAt: now(),
     }, null, 2);
   },
@@ -1288,6 +1397,7 @@ export const useStore = create<AppState>()((set, get) => ({
       holdings: data.holdings ?? [],
       holdingTransactions: data.holdingTransactions ?? [],
       importedStatements: data.importedStatements ?? [],
+      budgetSections: data.budgetSections ?? [],
     };
     if (imported.accounts.length === 0) {
       imported.accounts = [

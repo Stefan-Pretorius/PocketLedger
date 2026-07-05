@@ -204,9 +204,10 @@ export function GoalsPage() {
               const completed = hasTarget && pct >= 1;
               const contribs = expenses.filter(e => e.goalId === g.id && !e.isWithdrawal).sort((a, b) => b.date.localeCompare(a.date));
               const withdrawals = expenses.filter(e => e.goalId === g.id && e.isWithdrawal).sort((a, b) => b.date.localeCompare(a.date));
+              const fundedBy = expenses.filter(e => e.fundedByGoalId === g.id).sort((a, b) => b.date.localeCompare(a.date));
               const totalContribs = contribs.reduce((s, e) => s + e.amount, 0);
               const totalWithdrawals = withdrawals.reduce((s, e) => s + e.amount, 0);
-              const showHistory = contribs.length > 0 || withdrawals.length > 0;
+              const showHistory = contribs.length > 0 || withdrawals.length > 0 || fundedBy.length > 0;
               return (
                 <Card key={g.id}>
                   <div className="flex items-start justify-between mb-3">
@@ -246,9 +247,9 @@ export function GoalsPage() {
                       {totalWithdrawals > 0 && (
                         <>
                           <span>Withdrawn <span className="text-destructive font-medium">-{formatCurrency(totalWithdrawals)}</span></span>
-                          <span>Net <span className="text-foreground font-medium">{formatCurrency(totalContribs - totalWithdrawals)}</span></span>
                         </>
                       )}
+                      <span>Net <span className="text-foreground font-medium">{formatCurrency(totalContribs - totalWithdrawals)}</span></span>
                     </div>
                   )}
 
@@ -287,7 +288,7 @@ export function GoalsPage() {
 
                   {showHistory && (
                     <div className="mt-3 pt-3 border-t border-border">
-                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">History ({contribs.length + withdrawals.length})</p>
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">History ({contribs.length + withdrawals.length + fundedBy.length})</p>
                       <div className="space-y-1">
                         {contribs.slice(0, 5).map(e => (
                           <div key={e.id} className="flex items-center justify-between text-xs">
@@ -307,8 +308,17 @@ export function GoalsPage() {
                             <span className="font-medium flex-shrink-0 ml-2" style={{ color: g.color }}>-{formatCurrency(e.amount)}</span>
                           </div>
                         ))}
-                        {(contribs.length + withdrawals.length) > 10 && (
-                          <p className="text-[10px] text-muted-foreground text-center pt-1">+{contribs.length + withdrawals.length - 10} more</p>
+                        {fundedBy.slice(0, 5).map(e => (
+                          <div key={e.id} className="flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-muted-foreground flex-shrink-0">{formatDate(e.date)}</span>
+                              <span className="text-foreground truncate">{e.description}</span>
+                            </div>
+                            <span className="font-medium flex-shrink-0 ml-2" style={{ color: g.color, opacity: 0.7 }}>{formatCurrency(e.amount)}</span>
+                          </div>
+                        ))}
+                        {(contribs.length + withdrawals.length + fundedBy.length) > 15 && (
+                          <p className="text-[10px] text-muted-foreground text-center pt-1">+{contribs.length + withdrawals.length + fundedBy.length - 15} more</p>
                         )}
                       </div>
                     </div>

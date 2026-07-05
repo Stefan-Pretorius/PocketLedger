@@ -13,7 +13,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Account, AccountType } from "../types";
-import { getDirHandle, setDirHandle, removeDirHandle, autoSaveToDir, pickBackupFolder } from "../backup";
+import { getDirHandle, setDirHandle, removeDirHandle, autoSaveToDir, pickBackupFolder, getImportDirHandle, setImportDirHandle, removeImportDirHandle, pickImportFolder } from "../backup";
 import { getClientId, setClientId, getStoredToken, getLastSyncTime, getConnectedEmail, authenticate, uploadToDrive, downloadFromDrive, downloadFileContent, revokeAccess, getStatementFolderId, setStatementFolderId, removeStatementFolderId, listStatementFiles } from "../googledrive";
 
 function formatRelativeTime(ts: number): string {
@@ -274,8 +274,11 @@ export function SettingsPage() {
   // Statement folder state
   const [stmtFolderId, setStmtFolderId] = useState(getStatementFolderId() ?? "");
   const [stmtFolderName, setStmtFolderName] = useState<string | null>(null);
+  const [importFolderName, setImportFolderName] = useState<string | null>(null);
+  const [importFolderReady, setImportFolderReady] = useState(false);
 
   useEffect(() => {
+    getImportDirHandle().then(h => setImportFolderReady(!!h));
     // Fetch folder name if configured
     if (getStatementFolderId() && getStoredToken()) {
       listStatementFiles(getStatementFolderId()!, getClientId() ?? "").then(files => {
@@ -447,6 +450,22 @@ export function SettingsPage() {
     setStmtFolderName(null);
     setStmtFolderId("");
     toast.success("Statement folder removed");
+  };
+
+  const handlePickImportFolder = async () => {
+    const result = await pickImportFolder();
+    if (result) {
+      setImportFolderName(result.name);
+      setImportFolderReady(true);
+      toast.success(`Import folder set: ${result.name}`);
+    }
+  };
+
+  const handleRemoveImportFolder = async () => {
+    await removeImportDirHandle();
+    setImportFolderReady(false);
+    setImportFolderName(null);
+    toast.success("Import folder removed");
   };
 
   return (
@@ -675,56 +694,93 @@ export function SettingsPage() {
         {/* Statement Import Folder */}
         <div>
           <SectionHeader title="Statement Import Folder" />
-          <Card>
-            <div className="flex items-start gap-3">
-              <div className="w-9 h-9 rounded-xl bg-warning/10 flex items-center justify-center flex-shrink-0">
-                <FolderOpen size={16} className="text-warning" />
+          <div className="space-y-3">
+            {/* Google Drive option */}
+            <Card>
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-warning/10 flex items-center justify-center flex-shrink-0">
+                  <FolderOpen size={16} className="text-warning" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  {getStatementFolderId() ? (
+                    <>
+                      <p className="text-sm font-semibold text-foreground">✅ Drive folder configured</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {stmtFolderName ?? "Scan for files"}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground mt-1 font-mono">{getStatementFolderId()}</p>
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          onClick={handleRemoveStmtFolder}
+                          className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40 transition-colors"
+                        >
+                          Remove Folder
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Go to <strong>Statements</strong> page and tap "Scan Drive Folder" to import files.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-semibold text-foreground">Google Drive folder (requires API setup)</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 mb-2">
+                        Paste the ID of a Google Drive folder where you save bank statement files.
+                      </p>
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="Drive folder ID"
+                          value={stmtFolderId}
+                          onChange={setStmtFolderId}
+                          containerClassName="flex-1"
+                        />
+                        <Button label="Set" onClick={handleSetStmtFolder} variant="primary" size="sm" icon={FolderOpen} />
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        <button onClick={() => setShowDriveConfig(true)} className="underline">How to find folder ID</button>
+                      </p>
+                    </>
+                  )}
+                </div>
               </div>
-              <div className="flex-1 min-w-0">
-                {getStatementFolderId() ? (
-                  <>
-                    <p className="text-sm font-semibold text-foreground">✅ Folder configured</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {stmtFolderName ?? "Scan for files"}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground mt-1 font-mono">{getStatementFolderId()}</p>
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={handleRemoveStmtFolder}
-                        className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40 transition-colors"
-                      >
-                        Remove Folder
-                      </button>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-2">
-                      Go to <strong>Statements</strong> page and tap "Scan Drive Folder" to import files.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold text-foreground">Set statement import folder</p>
-                    <p className="text-xs text-muted-foreground mt-0.5 mb-2">
-                      Paste the ID of a Google Drive folder where you save bank statement files (PDF/CSV/OFX).
-                      Requires Google Drive Sync to be connected.
-                    </p>
-                    <div className="flex gap-2">
-                      <Input
-                        placeholder="Google Drive folder ID"
-                        value={stmtFolderId}
-                        onChange={setStmtFolderId}
-                        containerClassName="flex-1"
-                      />
-                      <Button label="Set" onClick={handleSetStmtFolder} variant="primary" size="sm" icon={FolderOpen} />
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-2">
-                      <button onClick={() => setShowDriveConfig(true)} className="underline">How to find folder ID</button>
-                      — open the folder in Drive, the ID is in the URL after <code className="text-[10px] bg-muted px-1 py-0.5 rounded">/folders/</code>
-                    </p>
-                  </>
-                )}
+            </Card>
+
+            {/* Local folder option */}
+            <Card>
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+                  <FolderOpen size={16} className="text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  {importFolderReady ? (
+                    <>
+                      <p className="text-sm font-semibold text-foreground">✅ Local folder configured</p>
+                      {importFolderName && <p className="text-xs text-muted-foreground mt-0.5">{importFolderName}</p>}
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          onClick={handleRemoveImportFolder}
+                          className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40 transition-colors"
+                        >
+                          Remove Folder
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Go to <strong>Statements</strong> page and tap "Import from Local Folder" to import files.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-semibold text-foreground">Local folder (no setup needed)</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 mb-2">
+                        Pick a folder on your computer. Works with your locally-synced Google Drive folder or any folder with CSV/PDF/OFX statement files.
+                      </p>
+                      <Button label="Choose Folder" onClick={handlePickImportFolder} variant="secondary" size="sm" icon={FolderOpen} />
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          </Card>
+            </Card>
+          </div>
         </div>
 
         {/* Bank mapping rules */}
@@ -756,8 +812,8 @@ export function SettingsPage() {
                         ? rule.transferToAccountId
                           ? `⏭ Transfer → ${accounts.find(a => a.id === rule.transferToAccountId)?.name ?? "?"}`
                           : "⏭ Skip"
-                        : rule.routeTo === "goal" ? "⭐ Goal contribution"
-                        : rule.routeTo === "goalWithdrawal" ? "🔻 Goal withdrawal"
+                        : rule.routeTo === "goal" ? `⭐ ${goals.find(g => g.id === rule.goalId)?.name ?? "Goal contribution"}`
+                        : rule.routeTo === "goalWithdrawal" ? `🔻 ${goals.find(g => g.id === rule.goalId)?.name ?? "Goal withdrawal"}`
                         : `→ ${rule.categoryName ?? "?"}`}
                     </p>
                   </div>

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useStore } from "../store";
-import { formatCurrency, monthName, getBudgetDateRange } from "../utils";
+import { formatCurrency, monthName, getBudgetDateRange, monthlyCategoryAmount } from "../utils";
 import { Colors } from "../theme";
 import { Card, SectionHeader, EmptyState, ColorDot } from "../components/ui";
 import { PageHeader } from "../components/Layout";
@@ -356,7 +356,7 @@ export function TrendsPage() {
         const budget = budgets.find(b => `${b.year}-${String(b.month).padStart(2, "0")}` === m.key);
         if (!budget) return 0;
         const cat = categories.find(c => c.budgetId === budget.id && c.name === name);
-        return cat?.allocatedAmount ?? 0;
+        return cat ? monthlyCategoryAmount(cat.allocatedAmount, cat.frequency) : 0;
       });
 
       // Only include categories that have at least one month with data
