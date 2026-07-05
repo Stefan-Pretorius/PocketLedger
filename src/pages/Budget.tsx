@@ -1716,29 +1716,60 @@ export function BudgetPage() {
                               <span className="text-xs font-semibold text-warning">{formatCurrency(ex.amount)}</span>
                               <button
                                 onClick={() => setMovingExpense(movingExpense === ex.id ? null : ex.id)}
-                                className="p-1 rounded-lg hover:bg-muted text-muted-foreground"
-                                title="Move to another category"
+                                className={cn("p-1 rounded-lg hover:bg-muted text-muted-foreground transition-colors", movingExpense === ex.id && "bg-primary/10 text-primary")}
+                                title="Assign category"
                               >
                                 <MoveRight size={11} />
                               </button>
                             </div>
                             {movingExpense === ex.id && (
                               <div className="w-full mt-1">
-                                <div className="flex flex-wrap gap-1.5 p-2 rounded-lg bg-muted/50 border border-border">
-                                  <p className="w-full text-[10px] text-muted-foreground font-medium mb-0.5">Assign to category:</p>
-                                  {[...summary.categories].filter(c => !c.isRounding).sort((a, b) => a.name.localeCompare(b.name)).map(targetCat => (
-                                    <button
-                                      key={targetCat.id}
-                                      onClick={() => {
-                                        updateExpense(ex.id, { categoryId: targetCat.id });
-                                        setMovingExpense(null);
-                                      }}
-                                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium bg-card hover:bg-primary/10 border border-border hover:border-primary/30 transition-colors"
-                                    >
-                                      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: targetCat.color }} />
-                                      {targetCat.name}
-                                    </button>
-                                  ))}
+                                <div className="p-2 rounded-lg bg-muted/50 border border-border">
+                                  <p className="text-[10px] text-muted-foreground font-medium mb-1.5">Assign to category:</p>
+                                  {(() => {
+                                    const catList = [...summary.categories].filter((c: any) => !c.isRounding);
+                                    const sectionLookup = new Map(safeBudgetSections.map(s => [s.id, s]));
+                                    const bySec: Record<string, typeof catList> = {};
+                                    for (const c of catList) {
+                                      const secName = c.sectionId != null ? (sectionLookup.get(c.sectionId)?.name ?? "Other") : "Other";
+                                      if (!bySec[secName]) bySec[secName] = [];
+                                      bySec[secName].push(c);
+                                    }
+                                    const secKeys = Object.keys(bySec).sort((a, b) => a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b));
+                                    return (
+                                      <>
+                                        {secKeys.map(sec => (
+                                          <div key={sec} className="mb-1.5 last:mb-0">
+                                            <p className="text-[9px] text-muted-foreground/60 uppercase tracking-wider font-semibold mb-1">{sec}</p>
+                                            <div className="grid grid-cols-2 gap-1">
+                                              {bySec[sec].sort((a: any, b: any) => a.name.localeCompare(b.name)).map((targetCat: any) => (
+                                                <button
+                                                  key={targetCat.id}
+                                                  onClick={() => {
+                                                    updateExpense(ex.id, { categoryId: targetCat.id });
+                                                    setMovingExpense(null);
+                                                  }}
+                                                  className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-card hover:bg-primary/10 border border-border hover:border-primary/30 transition-colors"
+                                                >
+                                                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: targetCat.color }} />
+                                                  {targetCat.name}
+                                                </button>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        ))}
+                                        <div className="border-t border-border pt-1.5 mt-1.5">
+                                          <button
+                                            onClick={() => { setMovingExpense(null); setShowNewCat(true); }}
+                                            className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-primary hover:bg-primary/10 border border-primary/30 hover:border-primary transition-colors"
+                                          >
+                                            <Plus size={11} />
+                                            Add Category
+                                          </button>
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
                               </div>
                             )}
