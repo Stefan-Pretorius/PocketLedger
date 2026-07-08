@@ -1035,6 +1035,12 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
     return new Set(summaries.filter(s => s.holding.type === "crypto").map(s => s.holding.id));
   });
   const [collapsed, setCollapsed] = useState(true);
+  const [showWhatIf, setShowWhatIf] = useState(false);
+  const [whatIfScenarios, setWhatIfScenarios] = useState<Record<number, { overrideContribution: number; overrideReturn: number }>>({});
+
+  const setWhatIfScenario = (id: number, sc: { overrideContribution: number; overrideReturn: number }) => {
+    setWhatIfScenarios(prev => ({ ...prev, [id]: sc }));
+  };
 
   const updateConfig = (id: number, patch: Partial<PerHoldingConfig>) => {
     setSavedConfigs(prev => {
@@ -1197,6 +1203,93 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
       )}
       {includedConfigs.length === 0 && (
         <p className="text-xs text-muted-foreground text-center py-1">Toggle holdings above to include them in the projection.</p>
+      )}
+
+      {/* What If comparison */}
+      {projection && includedConfigs.length > 0 && (
+        <>
+          <div className="border-t border-border pt-3">
+            <button
+              onClick={() => setShowWhatIf(!showWhatIf)}
+              className="flex items-center gap-1 text-xs text-primary hover:underline"
+            >
+              <BarChart3 size={12} />
+              {showWhatIf ? "Hide comparison" : "What if I change my investments?"}
+            </button>
+          </div>
+          {showWhatIf && (
+            <div className="space-y-3 border border-border rounded-lg p-3 bg-muted/20">
+              <p className="text-[10px] text-muted-foreground font-medium">Compare a scenario against your current plan</p>
+              <div className="space-y-2">
+                {included.map(s => {
+                  const cfg = savedConfigs[s.holding.id];
+                  if (!cfg) return null;
+                  const sc = whatIfScenarios[s.holding.id] ?? { overrideContribution: cfg.monthlyContribution, overrideReturn: cfg.annualReturn };
+                  return (
+                    <div key={s.holding.id} className="flex items-center gap-2">
+                      <HoldingIcon holding={s.holding} size={12} />
+                      <span className="text-xs text-foreground truncate flex-1 min-w-0">{s.holding.name}</span>
+                      <div className="flex items-center gap-1">
+                        <input type="number" value={sc.overrideContribution || ""}
+                          onChange={e => setWhatIfScenario(s.holding.id, { ...sc, overrideContribution: parseFloat(e.target.value) || 0 })}
+                          className="w-14 text-xs rounded border border-border bg-background px-1 py-0.5 text-right"
+                          placeholder="0" />
+                        <span className="text-[9px] text-muted-foreground">/mo</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <input type="number" value={sc.overrideReturn || ""}
+                          onChange={e => setWhatIfScenario(s.holding.id, { ...sc, overrideReturn: parseFloat(e.target.value) || 0 })}
+                          className="w-12 text-xs rounded border border-border bg-background px-1 py-0.5 text-right"
+                          placeholder="7" />
+                        <span className="text-[9px] text-muted-foreground">%</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {(() => {
+                const whatIfConfigs = includedConfigs.map(c => ({
+                  ...c,
+                  monthlyContribution: whatIfScenarios[c.holdingId]?.overrideContribution ?? c.monthlyContribution,
+                  annualReturn: whatIfScenarios[c.holdingId]?.overrideReturn ?? c.annualReturn,
+                }));
+                const wiMonthly = whatIfConfigs.reduce((s, h) => s + h.monthlyContribution, 0);
+                const wiWeightedReturn = whatIfConfigs.length > 0
+                  ? whatIfConfigs.reduce((s, h) => s + h.marketValue * h.annualReturn, 0) / whatIfConfigs.reduce((s, h) => s + h.marketValue, 0)
+                  : 0;
+                const wiMonths = monthsToTarget(whatIfConfigs, 1_000_000);
+                const baseMonths = projection.months;
+                const diffMonths = baseMonths - wiMonths;
+                if (!isFinite(wiMonths)) return <p className="text-xs text-muted-foreground">Scenario never reaches target.</p>;
+                return (
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div className="text-center p-2 rounded-lg bg-card border border-border">
+                      <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Current</p>
+                      <p className="text-sm font-bold text-foreground">
+                        {baseMonths > 0 ? `${Math.floor(baseMonths / 12)}y ${baseMonths % 12}mo` : "< 1mo"}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">{formatCurrency(totalMonthly)}/mo @ {weightedReturn.toFixed(1)}%</p>
+                    </div>
+                    <div className="text-center p-2 rounded-lg bg-card border border-primary/30">
+                      <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Scenario</p>
+                      <p className="text-sm font-bold" style={{ color: diffMonths > 0 ? "var(--success)" : "var(--danger)" }}>
+                        {wiMonths > 0 ? `${Math.floor(wiMonths / 12)}y ${wiMonths % 12}mo` : "< 1mo"}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">{formatCurrency(wiMonthly)}/mo @ {wiWeightedReturn.toFixed(1)}%</p>
+                    </div>
+                    {diffMonths !== 0 && (
+                      <div className="col-span-2 text-center">
+                        <span className={cn("text-[11px] font-semibold", diffMonths > 0 ? "text-success" : "text-destructive")}>
+                          {diffMonths > 0 ? "Saves " : "Adds "}{Math.abs(diffMonths)} month{Math.abs(diffMonths) !== 1 ? "s" : ""} ({Math.abs(diffMonths) >= 12 ? `${Math.floor(Math.abs(diffMonths) / 12)}y ${Math.abs(diffMonths) % 12}mo` : ""})
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </>
       )}
     </Card>
   );
