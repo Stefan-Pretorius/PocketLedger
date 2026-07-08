@@ -379,11 +379,12 @@ function IncomeSourceModal({
 // ─── Recurring Modal ──────────────────────────────────────────────────────────
 
 function RecurringModal({ visible, onClose, initial }: { visible: boolean; onClose: () => void; initial?: RecurringExpense }) {
-  const { createRecurring, updateRecurring, createGoal, accounts, goals } = useStore();
+  const { createRecurring, updateRecurring, createGoal, accounts, goals, holdings } = useStore();
   const [description, setDescription] = useState(initial?.description ?? "");
   const [amount, setAmount] = useState(String(initial?.amount ?? ""));
   const [categoryName, setCategoryName] = useState(initial?.categoryName ?? "");
   const [goalId, setGoalId] = useState<number | null>(initial?.goalId ?? null);
+  const [holdingId, setHoldingId] = useState<number | null>(initial?.holdingId ?? null);
   const [frequency, setFrequency] = useState<PayFrequency>(initial?.frequency ?? "monthly");
   const [dayOfMonth, setDayOfMonth] = useState(String(initial?.dayOfMonth ?? "1"));
   const [dayOfWeek, setDayOfWeek] = useState(initial?.dayOfWeek ?? 1);
@@ -423,6 +424,7 @@ function RecurringModal({ visible, onClose, initial }: { visible: boolean; onClo
       amount: amt,
       categoryName: isGoalMode ? "" : categoryName,
       goalId: goalId ?? undefined,
+      holdingId: holdingId ?? undefined,
       frequency,
       dayOfMonth: frequency === "monthly" ? Math.min(Math.max(parseInt(dayOfMonth) || 1, 1), 31) : undefined,
       dayOfWeek: frequency !== "monthly" ? dayOfWeek : undefined,
@@ -538,6 +540,35 @@ function RecurringModal({ visible, onClose, initial }: { visible: boolean; onClo
             </div>
           )}
         </div>
+        {!isGoalMode && holdings.length > 0 && (
+          <div>
+            <label className="text-sm font-medium text-muted-foreground block mb-2">Auto-invest to Holding (optional)</label>
+            <div className="flex flex-wrap gap-1.5">
+              <button onClick={() => setHoldingId(null)}
+                className={cn("flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                  holdingId === null ? "bg-muted text-foreground border-border" : "border-dashed border-border text-muted-foreground hover:border-primary/40"
+                )}>
+                None
+              </button>
+              {holdings.map(h => (
+                <button key={h.id} onClick={() => setHoldingId(h.id === holdingId ? null : h.id)}
+                  className={cn(
+                    "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                    holdingId === h.id
+                      ? "border-transparent text-white"
+                      : "border-border bg-card text-foreground hover:border-primary/40",
+                  )}
+                  style={holdingId === h.id ? { backgroundColor: h.color } : undefined}>
+                  <span className={holdingId === h.id ? "text-white" : "text-muted-foreground"}>📈</span>
+                  <span className="truncate">{h.name}</span>
+                </button>
+              ))}
+            </div>
+            {holdingId != null && (
+              <p className="text-xs text-muted-foreground mt-1">Creates a buy transaction on this holding when recurring is applied.</p>
+            )}
+          </div>
+        )}
         <AccountPicker accounts={accounts} value={accountId} onChange={setAccountId} label="Paid From Account" />
         <Input label="Merchant (optional)" value={merchant} onChange={setMerchant} placeholder="e.g. Netflix" />
         <Input label="Notes (optional)" value={notes} onChange={setNotes} multiline placeholder="Any notes…" />

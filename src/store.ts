@@ -535,7 +535,7 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   applyRecurring: (budgetId) => {
-    const { recurring, categories, expenses, budgets, goals } = get();
+    const { recurring, categories, expenses, budgets, goals, holdings } = get();
     const budget = budgets.find(b => b.id === budgetId);
     if (!budget) return { applied: 0, skipped: 0, unmatched: [] };
 
@@ -604,6 +604,23 @@ export const useStore = create<AppState>()((set, get) => ({
             notes: rec.notes,
             importedFromBank: false,
           });
+
+          // If linked to a holding, create a buy transaction
+          if (rec.holdingId != null) {
+            const holding = holdings.find(h => h.id === rec.holdingId);
+            if (holding && holding.currentUnitPrice != null && holding.currentUnitPrice > 0) {
+              get().createHoldingTransaction({
+                holdingId: rec.holdingId,
+                type: "buy",
+                units: rec.amount / holding.currentUnitPrice,
+                pricePerUnit: holding.currentUnitPrice,
+                fees: 0,
+                date,
+                isDividend: false,
+              });
+            }
+          }
+
           applied++;
         }
       }

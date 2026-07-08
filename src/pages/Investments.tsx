@@ -684,7 +684,7 @@ function CgtSection({ txs, holdingName }: { txs: HoldingTransaction[]; holdingNa
 // ─── Holding Detail View ──────────────────────────────────────────────────────
 
 function HoldingDetail({ holdingId, onBack }: { holdingId: number; onBack: () => void }) {
-  const { getHoldingSummary, deleteHolding, deleteHoldingTransaction } = useStore();
+  const { getHoldingSummary, deleteHolding, deleteHoldingTransaction, recurring } = useStore();
   const summary = getHoldingSummary(holdingId);
   const [showTx, setShowTx] = useState<HoldingTransaction | true | null>(null);
   const [confirmDeleteHolding, setConfirmDeleteHolding] = useState(false);
@@ -774,6 +774,28 @@ function HoldingDetail({ holdingId, onBack }: { holdingId: number; onBack: () =>
 
       {/* CGT Estimate */}
       <CgtSection txs={transactions} holdingName={holding.name} />
+
+      {/* Linked Recurring */}
+      {(() => {
+        const linked = recurring.filter(r => r.holdingId === holding.id);
+        if (linked.length === 0) return null;
+        return (
+          <div>
+            <SectionHeader title="Auto-invest Recurring" />
+            <Card padding={false}>
+              {linked.map(r => (
+                <div key={r.id} className="flex items-center justify-between px-4 py-2.5 border-b border-border last:border-b-0">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{r.description}</p>
+                    <p className="text-[11px] text-muted-foreground">{formatCurrency(r.amount)}/{r.frequency === "weekly" ? "wk" : r.frequency === "fortnightly" ? "fn" : "mo"}</p>
+                  </div>
+                  <span className="text-xs text-muted-foreground">{r.isActive ? "Active" : "Paused"}</span>
+                </div>
+              ))}
+            </Card>
+          </div>
+        );
+      })()}
 
       {/* Transactions */}
       <div>

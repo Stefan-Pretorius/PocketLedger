@@ -105,6 +105,8 @@ export interface RecurringExpense {
   accountId?: number;
   /** When set, this recurring template contributes to the goal envelope */
   goalId?: number;
+  /** When set, this recurring template creates buy transactions on the holding */
+  holdingId?: number;
   merchant?: string;
   notes?: string;
   isActive: boolean;
