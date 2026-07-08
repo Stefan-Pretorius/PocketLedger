@@ -22,6 +22,7 @@ export interface StoreData {
   holdingTransactions: HoldingTransaction[];
   importedStatements: ImportedStatement[];
   budgetSections: BudgetSection[];
+  lastRefreshedAt?: number;
 }
 
 const STORAGE_KEY = "pocketledger_data";
@@ -48,7 +49,7 @@ function load(): StoreData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [] };
+  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [], lastRefreshedAt: undefined };
 }
 
 function save(data: StoreData) {
@@ -71,6 +72,7 @@ function snapshot(s: AppState): StoreData {
     goals: s.goals, recurring: s.recurring, incomeSources: s.incomeSources,
     bankRules: s.bankRules, holdings: s.holdings, holdingTransactions: s.holdingTransactions,
     importedStatements: s.importedStatements, budgetSections: s.budgetSections,
+    lastRefreshedAt: s.lastRefreshedAt,
   };
 }
 
@@ -208,6 +210,7 @@ interface AppState extends StoreData {
 
   exportData: () => string;
   importData: (json: string) => void;
+  lastRefreshedAt: number | undefined;
 }
 
 export const useStore = create<AppState>()((set, get) => ({
@@ -215,7 +218,7 @@ export const useStore = create<AppState>()((set, get) => ({
   recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [],
   importedStatements: [],
   budgetSections: [],
-  activeBudgetId: null, loading: true,
+  activeBudgetId: null, loading: true, lastRefreshedAt: undefined,
 
   init: () => {
     const data = load();
@@ -1324,15 +1327,17 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   refreshAllPrices: async () => {
-    const { holdings } = get();
+    const { holdings, lastRefreshedAt } = get();
+    const COOLDOWN = 600_000;
+    if (lastRefreshedAt && Date.now() - lastRefreshedAt < COOLDOWN) return 0;
     const withSymbols = holdings.filter(h => h.symbol);
     let ok = 0;
     for (const h of withSymbols) {
       await get().refreshPrice(h.id);
       ok++;
-      // Small delay to avoid rate limiting
       await new Promise(r => setTimeout(r, 500));
     }
+    if (ok > 0) set({ lastRefreshedAt: Date.now() });
     return ok;
   },
 

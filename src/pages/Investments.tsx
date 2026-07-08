@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useStore } from "../store";
-import { formatCurrency, formatDate } from "../utils";
+import { formatCurrency, formatDate, monthlyCategoryAmount } from "../utils";
 import { Colors } from "../theme";
 import {
   Card, Button, Input, Modal, EmptyState, SectionHeader,
@@ -888,7 +888,7 @@ function getDefaultConfig(summaries: { holding: Holding; marketValue: number }[]
   const configs: Record<number, PerHoldingConfig> = {};
   for (const s of summaries) {
     configs[s.holding.id] = {
-      monthlyContribution: 0,
+      monthlyContribution: s.holding.type === "super" ? 2500 : 0,
       annualReturn: s.holding.type === "crypto" ? 10 : 7,
       dividendReinvestment: false,
     };
@@ -932,46 +932,142 @@ function monthsToTarget(
   return Infinity;
 }
 
-function generateTrajectory(
-  configs: { marketValue: number; monthlyContribution: number; annualReturn: number }[],
-  totalMonths: number,
-  points: number,
-): { month: number; value: number }[] {
-  const monthlyRates = configs.map(c => c.annualReturn / 100 / 12);
-  const step = Math.max(1, Math.floor(totalMonths / points));
-  const vals = configs.map(c => c.marketValue);
-  const result: { month: number; value: number }[] = [];
-  let currentMonth = 0;
-  for (let m = 1; m <= totalMonths; m++) {
-    for (let i = 0; i < configs.length; i++) {
-      vals[i] = vals[i] * (1 + monthlyRates[i]) + configs[i].monthlyContribution;
-    }
-    if (m % step === 0 || m === totalMonths) {
-      const total = vals.reduce((a, b) => a + b, 0);
-      result.push({ month: m, value: total });
-    }
-  }
-  return result;
+// ─── Monte Carlo Simulation ─────────────────────────────────────────────────
+
+function normalRandom(): number {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 }
 
-function ProjectionChart({ data, target, startValue }: {
-  data: { month: number; value: number }[];
+interface McHoldingInput {
+  name: string; color: string; startValue: number; monthlyContribution: number; annualReturn: number;
+}
+interface McPoint { month: number; p10: number; p50: number; p90: number }
+interface McHoldingLine { name: string; color: string; points: { month: number; value: number }[] }
+
+function runMonteCarlo(
+  holdings: McHoldingInput[],
+  totalMonths: number,
+  targetValue: number,
+  options?: {
+    simulations?: number; stdDevPct?: number; withdrawalRatePct?: number; inflationPct?: number;
+  },
+): { points: McPoint[]; holdingLines: McHoldingLine[]; medianMonths: number | null } {
+  const sims = options?.simulations ?? 500;
+  const stdDev = options?.stdDevPct ?? 15;
+  const withdrawalRate = options?.withdrawalRatePct;
+  const inflation = options?.inflationPct ?? 0;
+  const totalYears = Math.ceil(totalMonths / 12);
+  const nh = holdings.length;
+
+  // Pre-compute effective returns
+  const effReturns = holdings.map(h => Math.max(h.annualReturn - inflation, 0));
+
+  // Per-simulation: aggregate path + per-holding paths
+  const aggPaths: number[][] = Array.from({ length: sims }, () => []);
+  const hPaths: number[][][] = holdings.map(() => Array.from({ length: sims }, () => [] as number[]));
+
+  for (let sim = 0; sim < sims; sim++) {
+    const vals = holdings.map(h => h.startValue);
+    const aggVals: number[] = [vals.reduce((a, b) => a + b, 0)];
+    const hSimPaths = hPaths.map(p => p[sim]);
+    for (let hi = 0; hi < nh; hi++) hSimPaths[hi].push(vals[hi]);
+    aggPaths[sim].push(aggVals[0]);
+
+    // Pre-generate annual returns per holding
+    const annRets: number[][] = holdings.map((_, hi) => {
+      const rets: number[] = [];
+      for (let y = 0; y < totalYears; y++) rets.push(Math.max(effReturns[hi] + normalRandom() * stdDev, -99));
+      return rets;
+    });
+
+    let isWithdrawing = false;
+    for (let m = 1; m <= totalMonths; m++) {
+      if (!isWithdrawing && withdrawalRate != null && aggVals[m - 1] >= targetValue) isWithdrawing = true;
+      const yi = Math.floor((m - 1) / 12);
+      for (let hi = 0; hi < nh; hi++) {
+        const monthlyR = Math.pow(1 + annRets[hi][yi] / 100, 1 / 12) - 1;
+        let contrib = holdings[hi].monthlyContribution;
+        if (isWithdrawing && withdrawalRate != null) contrib = -vals[hi] * (withdrawalRate / 100 / 12);
+        vals[hi] = vals[hi] * (1 + monthlyR) + contrib;
+        if (vals[hi] < 0) vals[hi] = 0;
+        hSimPaths[hi].push(vals[hi]);
+      }
+      const total = vals.reduce((a, b) => a + b, 0);
+      aggPaths[sim].push(total);
+      aggVals.push(total);
+    }
+  }
+
+  const points: McPoint[] = [];
+  for (let m = 0; m <= totalMonths; m++) {
+    const vals = aggPaths.map(p => p[m]).sort((a, b) => a - b);
+    points.push({ month: m, p10: vals[Math.floor(vals.length * 0.1)], p50: vals[Math.floor(vals.length * 0.5)], p90: vals[Math.floor(vals.length * 0.9)] });
+  }
+
+  const holdingLines: McHoldingLine[] = holdings.map((h, hi) => {
+    const pts: { month: number; value: number }[] = [];
+    for (let m = 0; m <= totalMonths; m++) {
+      const vals = hPaths[hi].map(p => p[m]).sort((a, b) => a - b);
+      pts.push({ month: m, value: vals[Math.floor(vals.length * 0.5)] });
+    }
+    return { name: h.name, color: h.color, points: pts };
+  });
+
+  let medianMonths: number | null = null;
+  for (let m = 1; m <= totalMonths; m++) {
+    if (points[m].p50 >= targetValue) { medianMonths = m; break; }
+  }
+
+  return { points, holdingLines, medianMonths };
+}
+
+// ─── Monte Carlo Fan Chart ──────────────────────────────────────────────────
+
+function MonteCarloChart({ data, target, holdingLines, milestones, yearRange, maxYears, visibleHoldingNames }: {
+  data: { month: number; p10: number; p50: number; p90: number }[];
   target: number;
-  startValue: number;
+  holdingLines?: { name: string; color: string; points: { month: number; value: number }[] }[];
+  milestones?: { month: number; label: string; p10: string; p50: string; p90: string }[];
+  yearRange?: { start: number; end: number } | null;
+  maxYears?: number;
+  visibleHoldingNames?: Set<string>;
 }) {
-  const w = 600, h = 200, pad = { t: 16, r: 16, b: 28, l: 48 };
+  const startMonth = (yearRange?.start ?? 0) * 12;
+  const endMonth = (yearRange?.end ?? maxYears ?? 60) * 12;
+  const filtered = data.filter(d => d.month >= startMonth && d.month <= endMonth);
+  if (filtered.length < 2) return null;
+  const filteredHL = holdingLines?.map(hl => ({
+    ...hl,
+    points: hl.points.filter(p => p.month >= startMonth && p.month <= endMonth),
+  }));
+  const visibleHL = filteredHL?.filter(hl => !visibleHoldingNames || visibleHoldingNames.has(hl.name));
+  const filteredMS = milestones?.filter(m => m.month >= startMonth && m.month <= endMonth);
+
+  const w = 1000, h = 220, pad = { t: 20, r: 16, b: 32, l: 56 };
   const iw = w - pad.l - pad.r;
   const ih = h - pad.t - pad.b;
-  const maxVal = Math.max(target, ...data.map(d => d.value));
+  const allValues = filtered.flatMap(d => [d.p10, d.p50, d.p90, target]);
+  if (visibleHL) for (const hl of visibleHL) for (const p of hl.points) allValues.push(p.value);
+  const maxVal = Math.max(...allValues, 1);
   const minVal = 0;
   const range = maxVal - minVal || 1;
-  const xScale = (m: number) => pad.l + (m / data[data.length - 1].month) * iw;
+  const maxMonth = filtered[filtered.length - 1].month;
+  const xScale = (m: number) => pad.l + ((m - startMonth) / (endMonth - startMonth || 1)) * iw;
   const yScale = (v: number) => pad.t + ih - ((v - minVal) / range) * ih;
 
-  const pathD = data.map((d, i) => `${i === 0 ? "M" : "L"}${xScale(d.month).toFixed(1)},${yScale(d.value).toFixed(1)}`).join(" ");
-  const areaD = `${pathD} L${xScale(data[data.length - 1].month).toFixed(1)},${yScale(0)} L${xScale(data[0].month).toFixed(1)},${yScale(0)} Z`;
+  const p10Path = filtered.map((d, i) => `${i === 0 ? "M" : "L"}${xScale(d.month).toFixed(1)},${yScale(d.p10).toFixed(1)}`).join(" ");
+  const p90Rev = [...filtered].reverse().map((d) => `L${xScale(d.month).toFixed(1)},${yScale(d.p90).toFixed(1)}`).join(" ");
+  const fanD = `${p10Path} ${p90Rev} Z`;
+  const medianD = filtered.map((d, i) => `${i === 0 ? "M" : "L"}${xScale(d.month).toFixed(1)},${yScale(d.p50).toFixed(1)}`).join(" ");
 
-  // Y-axis labels
+  const holdingPaths = visibleHL?.map(hl => ({
+    color: hl.color,
+    d: hl.points.map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.month).toFixed(1)},${yScale(p.value).toFixed(1)}`).join(" "),
+  })) ?? [];
+
   const yTicks = 5;
   const yLabels: { v: number; y: number }[] = [];
   for (let i = 0; i <= yTicks; i++) {
@@ -979,54 +1075,122 @@ function ProjectionChart({ data, target, startValue }: {
     yLabels.push({ v, y: yScale(v) });
   }
 
-  // X-axis labels (show years)
-  const totalMonths = data[data.length - 1].month;
-  const yearStep = totalMonths > 120 ? 24 : totalMonths > 60 ? 12 : 6;
+  const spanYears = (endMonth - startMonth) / 12;
+  const yearStep = spanYears > 20 ? 60 : spanYears > 10 ? 24 : spanYears > 5 ? 12 : spanYears > 2 ? 6 : 3;
   const xLabels: { m: number; label: string }[] = [];
-  for (let m = 0; m <= totalMonths; m += yearStep) {
+  for (let m = startMonth; m <= endMonth; m += yearStep) {
     xLabels.push({ m, label: `${Math.floor(m / 12)}y` });
   }
 
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto" style={{ maxHeight: 180 }}>
-      {/* Grid lines */}
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto block">
       {yLabels.map(({ v, y }) => (
         <g key={v}>
           <line x1={pad.l} y1={y} x2={w - pad.r} y2={y} stroke="var(--color-border)" strokeWidth="0.5" />
-          <text x={pad.l - 6} y={y + 3} textAnchor="end" fill="var(--color-muted-foreground)" fontSize="9">
+          <text x={pad.l - 8} y={y + 4} textAnchor="end" fill="var(--color-muted-foreground)" fontSize="12">
             {v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : formatCurrency(v)}
           </text>
         </g>
       ))}
       {xLabels.map(({ m, label }) => (
-        <text key={m} x={xScale(m)} y={h - 4} textAnchor="middle" fill="var(--color-muted-foreground)" fontSize="9">
+        <text key={m} x={xScale(m)} y={h - 4} textAnchor="middle" fill="var(--color-muted-foreground)" fontSize="11">
           {label}
         </text>
       ))}
 
-      {/* Target line */}
       <line x1={pad.l} y1={yScale(target)} x2={w - pad.r} y2={yScale(target)}
-        stroke="var(--color-warning)" strokeWidth="1" strokeDasharray="4 3" />
-      <text x={w - pad.r - 2} y={yScale(target) - 4} textAnchor="end" fill="var(--color-warning)" fontSize="8">
+        stroke="var(--color-warning)" strokeWidth="1.5" strokeDasharray="6 4" />
+      <text x={w - pad.r - 2} y={yScale(target) - 6} textAnchor="end" fill="var(--color-warning)" fontSize="11" fontWeight="500">
         Target {formatCurrency(target)}
       </text>
 
-      {/* Area fill */}
-      <path d={areaD} fill="var(--color-primary)" fillOpacity="0.08" />
+      {/* Fan band (total) */}
+      <path d={fanD} fill="var(--color-primary)" fillOpacity="0.15" />
+      {/* Total median */}
+      <path d={medianD} fill="none" stroke="var(--color-primary)" strokeWidth="2.5" strokeLinejoin="round" />
+      {/* Per-holding median lines */}
+      {holdingPaths.map((hp, i) => (
+        <path key={i} d={hp.d} fill="none" stroke={hp.color} strokeWidth="1.5" strokeLinejoin="round" strokeDasharray="5 3" opacity="0.8" />
+      ))}
+      {/* Milestone vertical lines */}
+      {filteredMS?.map((ms) => (
+        <line key={ms.month} x1={xScale(ms.month)} y1={pad.t} x2={xScale(ms.month)} y2={h - pad.b}
+          stroke="var(--color-muted-foreground)" strokeWidth="0.5" strokeDasharray="3 3" opacity="0.4" />
+      ))}
 
-      {/* Line */}
-      <path d={pathD} fill="none" stroke="var(--color-primary)" strokeWidth="2" strokeLinejoin="round" />
-
-      {/* Start dot */}
-      <circle cx={xScale(data[0].month)} cy={yScale(data[0].value)} r="3" fill="var(--color-primary)" />
+      <circle cx={xScale(filtered[0].month)} cy={yScale(filtered[0].p50)} r="4" fill="var(--color-primary)" />
     </svg>
   );
 }
 
+// ─── Scenario Chart (What If) ──────────────────────────────────────────────
+
+function ScenarioChart({ configs, adjustForInflation, showWithdrawalPhase, yearRange, maxProjYears, visibleHoldingNames }: {
+  configs: { holdingId: number; marketValue: number; monthlyContribution: number; annualReturn: number }[];
+  adjustForInflation: boolean;
+  showWithdrawalPhase: boolean;
+  yearRange: { start: number; end: number } | null;
+  maxProjYears: number;
+  visibleHoldingNames?: Set<string>;
+}) {
+  const holdings = useStore(s => s.holdings);
+  const scPoints = useMemo(() => {
+    const target = 1_000_000;
+    const portfolioValue = configs.reduce((s, h) => s + h.marketValue, 0);
+    if (portfolioValue >= target) return null;
+    const inflation = adjustForInflation ? 3 : 0;
+    const mcInputs: McHoldingInput[] = configs.map(c => {
+      const h = holdings.find(x => x.id === c.holdingId);
+      return {
+        name: h?.name ?? `Holding ${c.holdingId}`,
+        color: h?.color ?? "#888",
+        startValue: c.marketValue,
+        monthlyContribution: c.monthlyContribution,
+        annualReturn: c.annualReturn,
+      };
+    });
+    const { points, medianMonths, holdingLines } = runMonteCarlo(mcInputs, maxProjYears * 12, target, {
+      simulations: 500, stdDevPct: 15,
+      withdrawalRatePct: showWithdrawalPhase ? 4 : undefined,
+      inflationPct: inflation,
+    });
+    if (medianMonths == null) return null;
+    const ms: { month: number; label: string; p10: string; p50: string; p90: string }[] = [];
+    for (const y of [5, 10, 15, 20]) {
+      const m = y * 12;
+      if (m < points.length && points[m].p50 > 0) {
+        ms.push({
+          month: m, label: `${y}yr · ${formatCurrency(points[m].p50)}`,
+          p10: formatCurrency(points[m].p10),
+          p50: formatCurrency(points[m].p50),
+          p90: formatCurrency(points[m].p90),
+        });
+      }
+    }
+    return { points, holdingLines, milestones: ms };
+  }, [configs, adjustForInflation, showWithdrawalPhase, holdings]);
+
+  if (!scPoints) return null;
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] text-primary font-medium text-center">Scenario projection</p>
+      <MonteCarloChart
+        data={scPoints.points}
+        target={1_000_000}
+        holdingLines={scPoints.holdingLines}
+        milestones={scPoints.milestones}
+        yearRange={yearRange}
+        maxYears={maxProjYears}
+        visibleHoldingNames={visibleHoldingNames}
+      />
+    </div>
+  );
+}
+
 function MillionaireProjection({ summaries }: { summaries: { holding: Holding; marketValue: number }[] }) {
+  const recurring = useStore(s => s.recurring);
   const [savedConfigs, setSavedConfigs] = useState<Record<number, PerHoldingConfig>>(() => {
     const loaded = loadProjectionConfigs();
-    // Merge with defaults for any missing holdings
     const merged = { ...getDefaultConfig(summaries), ...loaded };
     return merged;
   });
@@ -1034,14 +1198,44 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
   const [excluded, setExcluded] = useState<Set<number>>(() => {
     return new Set(summaries.filter(s => s.holding.type === "crypto").map(s => s.holding.id));
   });
+  // Auto-investment from recurring expenses linked to holdings
+  const autoContributions = useMemo(() => {
+    const map: Record<number, number> = {};
+    for (const r of recurring) {
+      if (r.holdingId && r.isActive) {
+        map[r.holdingId] = (map[r.holdingId] ?? 0) + monthlyCategoryAmount(r.amount, r.frequency);
+      }
+    }
+    return map;
+  }, [recurring]);
   const [collapsed, setCollapsed] = useState(true);
   const [showWhatIf, setShowWhatIf] = useState(false);
   const [scenarioConfigs, setScenarioConfigs] = useState<Record<number, PerHoldingConfig>>({});
+  const [adjustForInflation, setAdjustForInflation] = useState(false);
+  const [showWithdrawalPhase, setShowWithdrawalPhase] = useState(false);
+  const [yearRange, setYearRange] = useState<{ start: number; end: number } | null>({ start: 0, end: 20 });
+  const MILESTONE_YEARS = [5, 10, 15, 20];
 
   const updateScenarioConfig = (id: number, patch: Partial<PerHoldingConfig>) => {
     setScenarioConfigs(prev => {
       const existing = prev[id] ?? { monthlyContribution: 0, annualReturn: 7, dividendReinvestment: false };
       return { ...prev, [id]: { ...existing, ...patch } };
+    });
+  };
+
+  const applyPreset = (returnPct: number) => {
+    const next: Record<number, PerHoldingConfig> = {};
+    for (const s of summaries) {
+      if (excluded.has(s.holding.id)) continue;
+      const cfg = savedConfigs[s.holding.id];
+      if (cfg) {
+        next[s.holding.id] = { ...cfg, annualReturn: returnPct };
+      }
+    }
+    setSavedConfigs(prev => {
+      const merged = { ...prev, ...next };
+      saveProjectionConfigs(merged);
+      return merged;
     });
   };
 
@@ -1061,31 +1255,84 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
     });
   };
 
+  // Graph line toggles — initialize with all names
+  const [visibleHoldingNames, setVisibleHoldingNames] = useState<Set<string>>(() =>
+    new Set(summaries.map(s => s.holding.name))
+  );
+  const toggleLine = (name: string) => {
+    setVisibleHoldingNames(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  };
+
   const included = summaries.filter(s => !excluded.has(s.holding.id));
-  const includedConfigs = included
+  const includedHoldings = useMemo(() => included
     .filter(s => savedConfigs[s.holding.id])
     .map(s => ({
-      holdingId: s.holding.id,
+      holding: s.holding,
       marketValue: s.marketValue,
-      monthlyContribution: savedConfigs[s.holding.id].monthlyContribution,
+      monthlyContribution: (savedConfigs[s.holding.id].monthlyContribution || 0) + (autoContributions[s.holding.id] ?? 0),
       annualReturn: savedConfigs[s.holding.id].annualReturn,
-    }));
+    })), [included, savedConfigs, autoContributions]);
+
+  const includedConfigs = useMemo(() => includedHoldings.map(s => ({
+    holdingId: s.holding.id,
+    marketValue: s.marketValue,
+    monthlyContribution: s.monthlyContribution,
+    annualReturn: s.annualReturn,
+  })), [includedHoldings]);
 
   const totalMonthly = includedConfigs.reduce((s, h) => s + h.monthlyContribution, 0);
   const weightedReturn = includedConfigs.length > 0
     ? includedConfigs.reduce((s, h) => s + h.marketValue * h.annualReturn, 0) / includedConfigs.reduce((s, h) => s + h.marketValue, 0)
     : 0;
 
+  const maxProjYears = 60;
   const projection = useMemo(() => {
     const target = 1_000_000;
-    if (includedConfigs.length === 0) return null;
-    const portfolioValue = includedConfigs.reduce((s, h) => s + h.marketValue, 0);
-    if (portfolioValue >= target) return { years: 0, months: 0, message: "Already a millionaire!" as string | undefined };
-    const months = monthsToTarget(includedConfigs, target);
-    if (!isFinite(months)) return null;
-    const trajectory = generateTrajectory(includedConfigs, months, 60);
-    return { years: Math.floor(months / 12), months: months % 12, months, trajectory, message: undefined as string | undefined };
-  }, [includedConfigs]);
+    if (includedHoldings.length === 0) return null;
+    const portfolioValue = includedHoldings.reduce((s, h) => s + h.marketValue, 0);
+    if (portfolioValue >= target) return { years: 0, months: 0, message: "Already a millionaire!" as string | undefined, monteCarlo: null, holdingLines: [], milestones: undefined as any };
+
+    const inflation = adjustForInflation ? 3 : 0;
+    const mcInputs: McHoldingInput[] = includedHoldings.map(h => ({
+      name: h.holding.name, color: h.holding.color,
+      startValue: h.marketValue, monthlyContribution: h.monthlyContribution, annualReturn: h.annualReturn,
+    }));
+    const { points, medianMonths, holdingLines } = runMonteCarlo(mcInputs, maxProjYears * 12, target, {
+      simulations: 500, stdDevPct: 15,
+      withdrawalRatePct: showWithdrawalPhase ? 4 : undefined,
+      inflationPct: inflation,
+    });
+
+    if (medianMonths == null) return { years: 0, months: 0, message: "Not reachable with current settings" as string | undefined, monteCarlo: null, holdingLines: [], milestones: undefined as any };
+
+    const ms: { month: number; label: string; p10: string; p50: string; p90: string }[] = [];
+    for (const y of MILESTONE_YEARS) {
+      const m = y * 12;
+      if (m < points.length && points[m].p50 > 0) {
+        ms.push({
+          month: m,
+          label: `${y}yr · ${formatCurrency(points[m].p50)}`,
+          p10: formatCurrency(points[m].p10),
+          p50: formatCurrency(points[m].p50),
+          p90: formatCurrency(points[m].p90),
+        });
+      }
+    }
+
+    return {
+      years: Math.floor(medianMonths / 12),
+      months: medianMonths % 12,
+      months: medianMonths,
+      monteCarlo: points,
+      holdingLines,
+      milestones: ms,
+      message: undefined as string | undefined,
+    };
+  }, [includedHoldings, adjustForInflation, showWithdrawalPhase]);
 
   const totalSuper = summaries.filter(s => s.holding.type === "super").reduce((s, h) => s + h.marketValue, 0);
 
@@ -1103,6 +1350,46 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
 
       {totalSuper > 0 && (
         <p className="text-xs text-muted-foreground">Includes super ({formatCurrency(totalSuper)})</p>
+      )}
+
+      {/* Toggles row */}
+      {projection && projection.monteCarlo && (
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setAdjustForInflation(v => !v)}
+            className={cn("px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors border",
+              adjustForInflation
+                ? "bg-primary/10 text-primary border-primary/30"
+                : "bg-muted text-muted-foreground border-border")}>
+            {adjustForInflation ? "✓ Real (adj. 3% inflation)" : "Nominal values"}
+          </button>
+          <button onClick={() => setShowWithdrawalPhase(v => !v)}
+            className={cn("px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors border",
+              showWithdrawalPhase
+                ? "bg-warning/10 text-warning border-warning/30"
+                : "bg-muted text-muted-foreground border-border")}>
+            {showWithdrawalPhase ? "✓ 4% withdrawal after $1M" : "Accumulation only"}
+          </button>
+        </div>
+      )}
+
+      {/* Scenario presets (shown when settings expanded) */}
+      {!collapsed && (
+        <div>
+          <p className="text-[10px] text-muted-foreground mb-1.5 font-medium">Quick presets — set all returns to:</p>
+          <div className="flex gap-1.5 flex-wrap">
+            {[
+              { label: "Conservative (6%)", value: 6, color: "text-blue-500" },
+              { label: "Historical (10%)", value: 10, color: "text-success" },
+              { label: "Optimistic (14%)", value: 14, color: "text-warning" },
+            ].map(p => (
+              <button key={p.value} onClick={() => applyPreset(p.value)}
+                className={cn("px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors border",
+                  "bg-muted hover:bg-muted/80 text-foreground border-border")}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Per-holding settings */}
@@ -1125,14 +1412,22 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
                   <span className="text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground">{HOLDING_TYPE_LABELS[s.holding.type]}</span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] text-muted-foreground">$</span>
-                    <input type="number" value={cfg.monthlyContribution || ""}
-                      onChange={e => updateConfig(s.holding.id, { monthlyContribution: parseFloat(e.target.value) || 0 })}
-                      className="w-14 text-xs rounded border border-border bg-background px-1 py-0.5 text-right"
-                      placeholder="0"
-                      disabled={cfg.dividendReinvestment}
-                      title={cfg.dividendReinvestment ? "Dividend reinvestment active" : "Monthly manual contribution"} />
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-muted-foreground">$</span>
+                  <input type="number" value={cfg.monthlyContribution || ""}
+                    onChange={e => updateConfig(s.holding.id, { monthlyContribution: parseFloat(e.target.value) || 0 })}
+                    className="w-14 text-xs rounded border border-border bg-background px-1 py-0.5 text-right"
+                    placeholder="0"
+                    disabled={cfg.dividendReinvestment}
+                    title={cfg.dividendReinvestment ? "Dividend reinvestment active" : "Monthly manual contribution"} />
+                  {autoContributions[s.holding.id] != null && autoContributions[s.holding.id] > 0 && (
+                    <span className="text-[9px] text-success font-medium whitespace-nowrap" title="Auto-invest from recurring">
+                      +{formatCurrency(autoContributions[s.holding.id])}/mo
+                    </span>
+                  )}
+                  {s.holding.type === "super" && (
+                    <span className="text-[9px] text-muted-foreground/60 whitespace-nowrap">max $30K/yr pre-tax</span>
+                  )}
                   </div>
                   <div className="flex items-center gap-1">
                     <input type="number" value={cfg.annualReturn || ""}
@@ -1187,20 +1482,89 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
                 </p>
               </div>
 
-              {/* Trajectory chart */}
-              {projection.trajectory && projection.trajectory.length > 1 && (
-                <ProjectionChart
-                  data={projection.trajectory}
+              {/* Monte Carlo fan chart */}
+              {projection.monteCarlo && projection.monteCarlo.length > 1 && (
+                <MonteCarloChart
+                  data={projection.monteCarlo}
                   target={1_000_000}
-                  startValue={includedConfigs.reduce((s, h) => s + h.marketValue, 0)}
+                  holdingLines={projection.holdingLines}
+                  milestones={projection.milestones}
+                  yearRange={yearRange}
+                  maxYears={maxProjYears}
+                  visibleHoldingNames={visibleHoldingNames}
                 />
+              )}
+
+              {/* Year range controls */}
+              <div className="flex items-center gap-2 justify-center text-[11px] text-muted-foreground">
+                <span>From</span>
+                <input type="number" min={0} max={maxProjYears} value={yearRange?.start ?? 0}
+                  onChange={e => setYearRange(prev => ({ start: Math.max(0, parseInt(e.target.value) || 0), end: prev?.end ?? maxProjYears }))}
+                  className="w-12 rounded border border-primary/30 bg-background px-1 py-0.5 text-center text-xs" />
+                <span>yr to</span>
+                <input type="number" min={0} max={maxProjYears} value={yearRange?.end ?? maxProjYears}
+                  onChange={e => setYearRange(prev => ({ start: prev?.start ?? 0, end: Math.min(maxProjYears, parseInt(e.target.value) || maxProjYears) }))}
+                  className="w-12 rounded border border-primary/30 bg-background px-1 py-0.5 text-center text-xs" />
+                <span>yr</span>
+                {(yearRange?.start !== 0 || yearRange?.end !== 20) && (
+                  <button onClick={() => setYearRange({ start: 0, end: 20 })} className="text-[10px] text-primary hover:underline ml-1">Reset</button>
+                )}
+              </div>
+
+              {/* Milestone table */}
+              {projection.milestones && projection.milestones.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {projection.milestones.map(ms => {
+                    const year = Math.floor(ms.month / 12);
+                    return (
+                      <div key={ms.month} className="bg-muted/60 rounded-lg px-3 py-2 text-center">
+                        <p className="text-[10px] text-muted-foreground font-medium">{year}yr</p>
+                        <p className="text-xs font-bold text-foreground">{ms.p50}</p>
+                        <p className="text-[9px] text-muted-foreground">{ms.p10} – {ms.p90}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Holding legend — click to toggle line */}
+              {includedHoldings.length > 1 && (
+                <div className="flex flex-wrap gap-x-4 gap-y-1 justify-center text-[10px] text-muted-foreground">
+                  <span className="flex items-center gap-1 opacity-60">
+                    <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="var(--color-primary)" strokeWidth="2" strokeLinecap="round" /></svg>
+                    Total
+                  </span>
+                  {includedHoldings.map(h => {
+                    const visible = visibleHoldingNames.has(h.holding.name);
+                    return (
+                      <button key={h.holding.id} onClick={() => toggleLine(h.holding.name)}
+                        className={cn("flex items-center gap-1 cursor-pointer transition-opacity", visible ? "opacity-100" : "opacity-30 line-through")}>
+                        <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke={h.holding.color} strokeWidth="1.5" strokeLinecap="round" strokeDasharray="3 2" /></svg>
+                        {h.holding.name}
+                      </button>
+                    );
+                  })}
+                </div>
               )}
             </>
           )}
-          <div className="flex items-center gap-4 text-[10px] text-muted-foreground justify-center">
-            <span>• {formatCurrency(totalMonthly)}/mo</span>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground justify-center">
+            <span>• {formatCurrency(totalMonthly)}/mo total</span>
+            {includedHoldings.map(h => {
+              const manual = savedConfigs[h.holding.id]?.monthlyContribution || 0;
+              const auto = autoContributions[h.holding.id] ?? 0;
+              return (
+                <span key={h.holding.id} className="whitespace-nowrap">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full align-middle mr-0.5" style={{ backgroundColor: h.holding.color }} />
+                  {h.holding.name} {formatCurrency(manual)}/mo
+                  {auto > 0 && <span className="text-success"> +{formatCurrency(auto)}/mo auto</span>}
+                </span>
+              );
+            })}
             <span>• {weightedReturn.toFixed(1)}% p.a.</span>
             <span>• {includedConfigs.length} holding{includedConfigs.length !== 1 ? "s" : ""}</span>
+            {adjustForInflation && <span>• adj. 3% inflation</span>}
+            {showWithdrawalPhase && <span className="text-warning">• 4% withdrawal after target</span>}
           </div>
         </>
       )}
@@ -1253,9 +1617,10 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
               {(() => {
                 const scConfigs = includedConfigs.map(c => {
                   const sc = scenarioConfigs[c.holdingId];
+                  const auto = autoContributions[c.holdingId] ?? 0;
                   return {
                     ...c,
-                    monthlyContribution: sc?.monthlyContribution ?? c.monthlyContribution,
+                    monthlyContribution: (sc?.monthlyContribution ?? c.monthlyContribution - auto) + auto,
                     annualReturn: sc?.annualReturn ?? c.annualReturn,
                   };
                 });
@@ -1268,28 +1633,39 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
                 const diffMonths = baseMonths - scMonths;
                 if (!isFinite(scMonths)) return <p className="text-xs text-muted-foreground">Scenario never reaches target.</p>;
                 return (
-                  <div className="grid grid-cols-2 gap-3 pt-1">
-                    <div className="text-center p-2 rounded-lg bg-card border border-border">
-                      <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Current</p>
-                      <p className="text-sm font-bold text-foreground">
-                        {baseMonths > 0 ? `${Math.floor(baseMonths / 12)}y ${baseMonths % 12}mo` : "< 1mo"}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground">{formatCurrency(totalMonthly)}/mo @ {weightedReturn.toFixed(1)}%</p>
-                    </div>
-                    <div className="text-center p-2 rounded-lg bg-card border border-primary/30">
-                      <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Scenario</p>
-                      <p className="text-sm font-bold" style={{ color: diffMonths > 0 ? "var(--success)" : "var(--danger)" }}>
-                        {scMonths > 0 ? `${Math.floor(scMonths / 12)}y ${scMonths % 12}mo` : "< 1mo"}
-                      </p>
-                      <p className="text-[10px] text-muted-foreground">{formatCurrency(scMonthly)}/mo @ {scWeightedReturn.toFixed(1)}%</p>
-                    </div>
-                    {diffMonths !== 0 && (
-                      <div className="col-span-2 text-center">
-                        <span className={cn("text-[11px] font-semibold", diffMonths > 0 ? "text-success" : "text-destructive")}>
-                          {diffMonths > 0 ? "Saves " : "Adds "}{Math.abs(Math.floor(diffMonths / 12))}y {Math.abs(diffMonths % 12)}mo
-                        </span>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3 pt-1">
+                      <div className="text-center p-2 rounded-lg bg-card border border-border">
+                        <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Current</p>
+                        <p className="text-sm font-bold text-foreground">
+                          {baseMonths > 0 ? `${Math.floor(baseMonths / 12)}y ${baseMonths % 12}mo` : "< 1mo"}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">{formatCurrency(totalMonthly)}/mo @ {weightedReturn.toFixed(1)}%</p>
                       </div>
-                    )}
+                      <div className="text-center p-2 rounded-lg bg-card border border-primary/30">
+                        <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Scenario</p>
+                        <p className="text-sm font-bold" style={{ color: diffMonths > 0 ? "var(--success)" : "var(--danger)" }}>
+                          {scMonths > 0 ? `${Math.floor(scMonths / 12)}y ${scMonths % 12}mo` : "< 1mo"}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">{formatCurrency(scMonthly)}/mo @ {scWeightedReturn.toFixed(1)}%</p>
+                      </div>
+                      {diffMonths !== 0 && (
+                        <div className="col-span-2 text-center">
+                          <span className={cn("text-[11px] font-semibold", diffMonths > 0 ? "text-success" : "text-destructive")}>
+                            {diffMonths > 0 ? "Saves " : "Adds "}{Math.abs(Math.floor(diffMonths / 12))}y {Math.abs(diffMonths % 12)}mo
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    {/* Scenario chart */}
+                    <ScenarioChart
+                      configs={scConfigs}
+                      adjustForInflation={adjustForInflation}
+                      showWithdrawalPhase={showWithdrawalPhase}
+                      yearRange={yearRange}
+                      maxProjYears={maxProjYears}
+                      visibleHoldingNames={visibleHoldingNames}
+                    />
                   </div>
                 );
               })()}
@@ -1312,7 +1688,7 @@ export function InvestmentsPage() {
 
   const portfolio = useMemo(() => getPortfolioSummary(), [getPortfolioSummary, holdings]);
 
-  // Auto-refresh prices when holdings with symbols change
+  // Auto-refresh prices when holdings with symbols change (cooldown 5 min)
   useEffect(() => {
     const hasSymbols = holdings.some(h => h.symbol);
     if (hasSymbols) {
@@ -1325,7 +1701,11 @@ export function InvestmentsPage() {
     const count = await refreshAllPrices();
     setRefreshing(false);
     if (count > 0) toast.success(`Refreshed prices for ${count} holding${count !== 1 ? "s" : ""}`);
+    else if (count === 0 && holdings.some(h => h.symbol)) toast.info("Prices refreshed recently — try again later");
   };
+
+  const lastRef = useStore(s => s.lastRefreshedAt);
+  const lastRefreshedAgo = lastRef ? Math.round((Date.now() - lastRef) / 60000) : null;
 
   if (detailHoldingId != null) {
     return (

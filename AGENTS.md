@@ -1,39 +1,35 @@
 ## Goal
-- Add goal withdrawal support (spending from saved envelopes), make goal target amount optional, and add transfer pairing to declutter the expense list.
-- Add recurring goal allocation contributions and "funded by goal" expense tagging with import-level withdrawal-merchant pairing.
+Build a personal finance tracker with budgeting, statement import, goals, recurring expenses, dashboard, investments, and projection tools.
 
 ## Constraints & Preferences
-- Contribution/Withdrawal toggle uses the same pill button style as other app controls.
-- Goal balance clamped at 0 (no negative envelope).
-- Withdrawal uses the goal's color with a `Repeat` icon (not success/danger colours).
-- Goal withdrawals excluded from budget spending (same as contributions).
-- Deleting a withdrawal expense reverses the balance change (adds back, clamped at 0).
-- Editing a contribution→withdrawal (or vice versa) reverses old and applies new, clamped at 0.
-- `Goal.targetAmount` optional — no progress bar when undefined, no cap on contributions.
-- `Expense.isWithdrawal` field distinguishes spending from saving on expense records.
-- Goal contributions count as budget expenses (they reduce available budget). Goal withdrawals do not — they only affect `currentAmount`.
-- Category picker shown alongside goal selector in contribution mode (ExpenseModal, ImportReview, ContributeModal) so contributions can be tied to a budget category.
-- Balance transition logic lives in ExpenseModal (not `updateExpense` store action) to avoid double-adjustment.
-- Auto-save rules for goal withdrawals use `routeTo: "goalWithdrawal"` in `BankMappingRule`.
-- `RecurringExpense.goalId` links a template to a goal; `applyRecurring` creates contribution expenses AND adjusts goal balance.
-- `Expense.fundedByGoalId` tags a regular expense as paid from a goal envelope (record-keeping only, no balance change).
-- Withdrawal-merchant pairing in `commitImport` pairs `goalWithdrawal` transactions with merchant transactions on the same date with similar amounts (±10%). When paired, the withdrawal silently adjusts goal balance and the merchant gets `fundedByGoalId`.
+- Vite v8 builds with zero errors
+- `showDirectoryPicker()` for local folder import (no OAuth needed)
+- Categories grouped into user-defined `BudgetSection` entities
+- Budget date range uses `startDay` (e.g. 15 Jun → 14 Jul)
+- Dashboard spending chart toggles "By Category" / "By Section"
+- CSV parser detects `balance`/`running balance` column for auto-updating account balance
+- Category frequency (weekly/fortnightly/monthly) normalized to monthly equivalent in all views
+- Goal-linked recurring creates auto-contributions; holding-linked recurring creates buy transactions
+- Monte Carlo projection uses 500 simulations, 15% annual std dev, annual return sampling with monthly compounding
+- Monte Carlo fan chart shows p10/p50/p90 percentiles; milestone values shown in a table below the chart (not on the SVG) to avoid overlap
+- Inflation toggle reduces returns by 3% (real vs nominal)
+- Withdrawal phase applies 4% rule after target is reached
+- Scenario presets (Conservative 6%, Historical 10%, Optimistic 14%) set all holdings' return rates at once
 
 ## Progress
 ### Done
-- **`src/types.ts`**: Made `Goal.targetAmount` optional; added `Expense.isWithdrawal?: boolean`; added `"goalWithdrawal"` to `BankMappingRule.routeTo` union.
-- **`src/store.ts`**: Added `goalWithdrawalId?: number` to `ImportedTransaction`; `previewImport` matches `"goalWithdrawal"` bank rules and passes `goalWithdrawalId` on rows; `commitImport` handles `goalWithdrawalId` (subtracts from `currentAmount`, clamp at 0, creates `isWithdrawal: true` expense); `commitImport` returns `goalWithdrawalCount`; `deleteExpense` cascades goal balance (reverses contribution or withdrawal, clamp at 0); duplicate-check skips also clear `goalWithdrawalId`.
-- **Statements.tsx**: `TargetSelect` added goal withdrawal optgroup (`🔻 Goal Withdrawals`); `RuleForm` added `"goalWithdrawal"` route button (chart-2 colour, 🔻 icon) and goal picker; quick goal form makes target optional; auto-save rules create `goalWithdrawal` rules; summary chips include `goalWithdrawalCount`; import review rows show withdrawal styling (chart-2 borders, withdrawal auto-match badges).
-- **Settings.tsx**: `BankRuleModal` added `"goalWithdrawal"` route option (chart-2 colour, 🔻 icon); rule list displays "🔻 Goal withdrawal" labels.
-- **Expenses.tsx**: `ExpenseModal` added Contribution/Withdrawal toggle pill (`Repeat` icon, goal colour background); save function handles withdrawal balance logic (subtract from goal, clamp at 0); expense rows show `Repeat` icon and "Withdrawn" badge for withdrawals; amount text uses `text-foreground` for withdrawals (not success).
-- **Goals.tsx**: `GoalModal` makes target optional (label: "Target Amount (optional)", allows empty/undefined); `ContributeModal` skips cap when no target, shows "No target set" instead of "of $X"; goal cards show progress bar only when `targetAmount` is defined; history section shows contributions (+green) and withdrawals (goal-coloured, with `-` prefix); balance summary bar shows Contributed/Withdrawn/Net amounts.
-- **Dashboard.tsx**: `goalProgress` handles optional `targetAmount` (no division by zero); goal cards show progress bar only when target exists; `recentExpenses` and trend data exclude `isWithdrawal` from budget spending.
-- **`src/types.ts`**: Added `RecurringExpense.goalId?` and `Expense.fundedByGoalId?`.
-- **`src/store.ts`**: `applyRecurring` handles `goalId` (creates contribution expense + bumps goal balance); `commitImport` pairs goal withdrawals with merchant transactions (±10%, same date, silent withdrawal + `fundedByGoalId`).
-- **Budget.tsx**: `RecurringModal` adds goal picker toggle (Category ↔ Goal mode) and inline goal creation (`+ Goal` button); goal-linked recurring saves `goalId`.
-- **Expenses.tsx**: `ExpenseModal` adds "Funded by Goal" picker for non-goal expenses; expense rows show funded-by-goal badge.
-- **Statements.tsx**: `ImportReview` shows withdrawal-merchant pairing preview with "Paired with <merchant>" / "Funded by <goal>" indicators and "Break" button.
-- **Goals.tsx**: Goal cards show `fundedByGoal` expenses in history list; net balance summary always shown.
+- **`src/types.ts`**: Made `Goal.targetAmount` optional; added `Expense.isWithdrawal?: boolean`; `BankMappingRule.routeTo` includes `"goalWithdrawal"`; added `RecurringExpense.{goalId,holdingId}`, `Expense.fundedByGoalId`, `Category.{sectionId,frequency,linkedGoalId}`, `BudgetSection` interface, `Holding`, `HoldingTransaction`, `HoldingSummary`, `PortfolioSummary`
+- **`src/store.ts`**: Full CRUD for budgets, categories, budget sections, expenses, goals, accounts, recurring, income sources, bank rules, holdings, holding transactions; `previewImport` matches bank rules (category, goal, goalWithdrawal, skip, holding, income, householdTransfer); `commitImport` handles transfer pairing, goal withdrawals, balance override, withdrawal-merchant pairing (±10% same-date); `deleteExpense` cascades goal balance; `applyRecurring` handles goalId (contributions) and holdingId (buy transactions); `init()` migration for legacy data; price refresh cooldown (5 min `lastRefreshedAt`)
+- **`src/pages/Investments.tsx`**: Full portfolio management (holdings + transactions), "By Type" summary, CGT estimate, holding detail with FIFO cost tracking, MillionaireProjection with Monte Carlo simulation (500 sims, 15% std dev, annual return sampling → p10/p50/p90 fan chart), inflation toggle (real vs nominal), withdrawal phase toggle (4% rule after target), scenario presets (6%/10%/14%), milestone markers at 5/10/15/20yr shown as table below chart (not on SVG to avoid overlap), per-holding colored dashed lines with HTML legend, What If per-holding scenario comparison with its own Monte Carlo chart, auto-refresh prices from CoinGecko/Yahoo/Binance (5-min cooldown), auto-investment recurring amounts in projection, year-range zoom controls on chart, clickable legend to toggle individual holding lines on/off
+- **`src/pages/Budget.tsx`**: Section-organized categories, auto-organize via keyword map, inline CategoryModal with section picker + "New Section" form, RecuringModal with goal picker + holding picker + inline "Create Goal", BudgetPrintModal, category filter pills, uncategorized section with section-grouped picker
+- **`src/pages/Dashboard.tsx`**: Date range heading (e.g. "15 Jun – 14 Jul"), By Category / By Section chart toggle, section-grouped category budgets using `monthlyCategoryAmount()` with `/wk` `/fn` indicators, round-up summary
+- **`src/pages/Trends.tsx`**: Monthly budget allocation heatmap with `monthlyCategoryAmount()` normalization, biggest movers
+- **`src/pages/Statements.tsx`**: `parseCSV` balance column detection, ending balance input in ImportReview, local folder import (scan/select/parse via `showDirectoryPicker`), TargetSelect withdrawal optgroup, RuleForm withdrawal route, quick goal form, auto-save rules, pairing preview with Break button
+- **`src/pages/Settings.tsx`**: Bank rule list with goal names, Statement Import Folder settings (Google Drive + Local Folder with pick/remove), BankRuleModal withdrawal route
+- **`src/pages/Expenses.tsx`**: ExpenseModal with Contribution/Withdrawal toggle + "Funded by Goal" picker, expense row withdrawal badge + funded-by-goal badge
+- **`src/pages/Goals.tsx`**: Optional target amount, GoalModal, withdrawal history tinting, no-cap contributions, balance summary, fundedByGoal expenses
+- **`src/backup.ts`**: `getImportDirHandle`, `setImportDirHandle`, `removeImportDirHandle`, `pickImportFolder`, `listImportFiles` using IndexedDB
+- **`src/components/ui.tsx`**: Shared Modal, ProgressBar, ColorPicker, ColorDot, AccountPicker, Confirm, EmptyState, Card, Button, Input, SectionHeader
 
 ### In Progress
 - (none)
@@ -42,36 +38,44 @@
 - (none)
 
 ## Key Decisions
-- Goal withdrawals tracked via `Expense.isWithdrawal` field — cleanest way to distinguish spending from saving on the same expense.
-- Balance clamp at 0 rather than allowing negative envelopes, per user request.
-- Transfer pairing uses two strategies: `importId`-based (reliable for new imports) and description-based (fallback for older data).
-- Balance transition logic lives in ExpenseModal (not `updateExpense` store action) to avoid double-adjustment when both the modal and the store try to update goal balances.
-- `updateExpense` store action is a simple field update — callers (ExpenseModal) handle goal balance adjustments themselves.
-- `goalWithdrawalCount` returned from `commitImport` but not persisted in `ImportedStatement` — keeps schema simple, the count is display-only.
+- `BudgetSection` as separate entity (not free-text) so user defines once and picks from list
+- Goal withdrawals tracked via `Expense.isWithdrawal` — cleanest way to distinguish spending from saving
+- Balance clamp at 0 rather than negative envelopes
+- Transfer pairing uses `importId`-based (reliable for new imports) and description-based (fallback for old data)
+- Balance transition logic lives in ExpenseModal (not `updateExpense` store action) to avoid double-adjustment
+- `updateExpense` store action is a simple field update — callers handle goal balance adjustments themselves
+- Monte Carlo: annual return sampling (N(μ, σ) per year) with monthly compounding — most realistic for long-term projections
+- 500 simulations × 60 year max with 15% annual std dev matches historical S&P 500 volatility
+- Withdrawal phase uses 4% of current balance monthly (simplified safe withdrawal rate)
+- What If scenario presets update all holdings' return rates simultaneously for quick comparison
+- Milestone values shown as HTML table (not on SVG) to avoid overlapping badges at dense year intervals
 
 ## Next Steps
 - (none presently)
 
 ## Critical Context
-- `BankMappingRule` uses `"goalWithdrawal"` route with the same `goalId` field — the route toggles whether it adds (goal) or subtracts (goalWithdrawal).
-- `commitImport` checks `goalWithdrawalId` before `goalId` — mutually exclusive, only one wins per row.
-- `deleteExpense` adjusts goal balance AFTER the expense is removed from the array but BEFORE `save()`, so `snapshot(get())` includes the updated goal.
-- Goal contributions (`goalId`) still use `+=` on `currentAmount` — unchanged behavior.
-- Goal withdrawals excluded from budget spending (same as contributions).
-- Import review `TargetSelect` shows withdrawal options as separate optgroup "Goal Withdrawals" with 🔻 icon.
-- Category picker shown alongside goal selector in contribution mode (ExpenseModal, ImportReview, ContributeModal) so contributions can be tied to a budget category.
-- `commitImport` passes `categoryId` through for goal contributions so imported contributions carry the category picked in review.
-- Goal-linked recurring templates (`RecurringExpense.goalId`) create contribution expenses and bump goal balance — same as manual contribution but automated.
-- `fundedByGoalId` is purely record-keeping — no balance change. The actual balance adjustment happens via the paired withdrawal.
-- Withdrawal-merchant pairing happens automatically in `commitImport` based on same-date ±10% amount matching. Users can break pairs in import review by clearing the withdrawal assignment.
+- `BankMappingRule` uses `"goalWithdrawal"` route with same `goalId` field — route toggles add (goal) vs subtract (goalWithdrawal)
+- `commitImport` checks `goalWithdrawalId` before `goalId` — mutually exclusive, only one wins per row
+- `deleteExpense` adjusts goal balance AFTER expense removed from array but BEFORE `save()`, so `snapshot(get())` includes updated goal
+- Goal contributions count as budget expenses (reduce available budget). Goal withdrawals do not — only affect `currentAmount`
+- `fundedByGoalId` is purely record-keeping — no balance change. Actual balance adjustment happens via paired withdrawal
+- `getHoldingSummary` uses FIFO cost tracking for realised gains, CGT estimate (Australia, 50% discount >12mo)
+- Monte Carlo `normalRandom()` uses Box-Muller transform; `runMonteCarlo` pre-generates annual returns per simulation then compounds monthly
+- Projection chart renders SVG fan (p10-p90 shaded, p50 line) + milestone badge rects with p10–p90 range text
+- Inflation toggle subtracts 3% from effective return rate; withdrawal toggle activates 4% rule after median crosses target
+- Price refresh has 5-minute cooldown (`lastRefreshedAt`); auto-investment recurring amounts automatically included in projection `monthlyContribution`; What If scenario now renders its own Monte Carlo fan chart below comparison text
+- Chart defaults to 20-year view with year-range zoom; super holdings default to $2,500/mo contribution ($30K/yr pre-tax limit)
 
 ## Relevant Files
-- `src/types.ts`: `BudgetSection` interface + `sectionId` on `Category`; `Goal.targetAmount?`, `Expense.isWithdrawal?`, `BankMappingRule.routeTo` with `"goalWithdrawal"`; `RecurringExpense.goalId?`, `Expense.fundedByGoalId?`
-- `src/store.ts`: `budgetSections` in `StoreData`, CRUD actions; `goalWithdrawalId` on `ImportedTransaction`; `previewImport`/`commitImport`/`deleteExpense` updated; `applyRecurring` goalId handling; `commitImport` withdrawal-merchant pairing
-- `src/pages/Budget.tsx`: `CategoryModal` section picker, section-grouped display, `SECTION_KEYWORDS` + auto-organize; goal indicator on `RecurringRow`; `RecurringModal` goal picker
-- `src/pages/Dashboard.tsx`: date range heading, By Category/By Section chart toggle, section-grouped category budgets; undefined target handling; exclude withdrawals from budget spending
-- `src/pages/Statements.tsx`: `parseCSV` balance column, ending balance input in `ImportReview`; local folder import flow (scan, select, import from stored directory handle); `TargetSelect` withdrawal optgroup; `RuleForm` withdrawal route; quick goal optional target; auto-save `goalWithdrawal` rules; `ImportReview` withdrawal-merchant pairing preview
-- `src/pages/Settings.tsx`: mapping list shows goal names; "Statement Import Folder" has both Google Drive and Local Folder options with pick/remove controls; `BankRuleModal` withdrawal route option
-- `src/backup.ts`: Added `getImportDirHandle`, `setImportDirHandle`, `removeImportDirHandle`, `pickImportFolder`, `listImportFiles` using the same IndexedDB store as backup handles
-- `src/pages/Expenses.tsx`: `ExpenseModal` Contribution/Withdrawal toggle; expense row withdrawal badge; "Funded by Goal" picker; expense row funded-by-goal badge
-- `src/pages/Goals.tsx`: Optional target; withdrawal history tinting; balance summary; no-cap contribution
+- `src/types.ts`: All data model interfaces
+- `src/store.ts`: Zustand store with full CRUD + import/recurring/portfolio logic
+- `src/pages/Investments.tsx`: Holding management, CGT, MillionaireProjection with Monte Carlo
+- `src/pages/Budget.tsx`: Section-organized categories, recurring modal, print preview
+- `src/pages/Dashboard.tsx`: Date range heading, chart toggles, section-grouped budgets
+- `src/pages/Statements.tsx`: CSV parse/import, bank rules, local folder import, pairing
+- `src/pages/Settings.tsx`: Bank rules, import folder settings
+- `src/pages/Expenses.tsx`: Expense CRUD modal with goal/withdrawal/fundedBy support
+- `src/pages/Goals.tsx`: Goal CRUD with optional target, contribution/withdrawal history
+- `src/backup.ts`: IndexedDB-based directory handle persistence
+- `src/components/ui.tsx`: Shared UI primitives
+- `src/utils.ts`: formatCurrency, formatDate, monthlyCategoryAmount, getBudgetDateRange, etc.
