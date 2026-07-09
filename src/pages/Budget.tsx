@@ -9,7 +9,7 @@ import {
 import { PageHeader } from "../components/Layout";
 import { BudgetYearTabs, BudgetMonthGrid } from "../components/BudgetPicker";
 import {
-  Plus, Trash2, Edit2, Wallet, RefreshCw, ToggleLeft, ToggleRight, CalendarClock, Copy, ChevronDown, Repeat, Tag, MoveRight, AlertTriangle, Target, Printer,
+  Plus, Trash2, Edit2, Wallet, RefreshCw, ToggleLeft, ToggleRight, CalendarClock, Copy, ChevronDown, Repeat, Tag, MoveRight, AlertTriangle, Target, Printer, LayoutGrid, List,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -1268,6 +1268,8 @@ export function BudgetPage() {
   const [showPrint, setShowPrint] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<{ type: "budget" | "category" | "income" | "recurring"; id: number } | null>(null);
   const [filterCategoryId, setFilterCategoryId] = useState<number | "uncategorized" | null>(null);
+  const [viewMode, setViewMode] = useState<"cards" | "compact" | "list">(() => (localStorage.getItem("budgetView") as "cards" | "compact" | "list") ?? "cards");
+  const setView = (mode: "cards" | "compact" | "list") => { setViewMode(mode); localStorage.setItem("budgetView", mode); };
 
   const safeBudgetSections = budgetSections ?? [];
   const summary = activeBudgetId ? getBudgetSummary(activeBudgetId) : null;
@@ -1654,7 +1656,12 @@ export function BudgetPage() {
             {/* Budget Categories */}
             <div>
               <SectionHeader title="Budget Categories" action={{ label: "+ Add", onPress: () => setShowNewCat(true) }} />
-              <div className="flex justify-end -mt-2 mb-2">
+              <div className="flex items-center justify-between -mt-2 mb-2">
+                <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
+                  <button onClick={() => setView("cards")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "cards" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Card view"><LayoutGrid size={14} /></button>
+                  <button onClick={() => setView("compact")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "compact" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Compact view"><div className="grid grid-cols-2 gap-[2px]"><div className="w-[5px] h-[5px] rounded-sm bg-current" /><div className="w-[5px] h-[5px] rounded-sm bg-current" /><div className="w-[5px] h-[5px] rounded-sm bg-current" /><div className="w-[5px] h-[5px] rounded-sm bg-current" /></div></button>
+                  <button onClick={() => setView("list")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "list" ? "bg-card shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="List view"><List size={14} /></button>
+                </div>
                 <button onClick={handleOrganizeSections} className="text-[11px] text-primary hover:underline">
                   Auto-organize sections
                 </button>
@@ -1682,27 +1689,76 @@ export function BudgetPage() {
                       return (
                         <div key={sec}>
                           <SectionHeader title={sec} />
-                          <div className="space-y-2">
-                            {recCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={true}
-                              activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
-                              expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
-                              movingExpense={movingExpense} setMovingExpense={setMovingExpense}
-                              movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
-                              setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
-                            {recCats.length > 0 && oneoffCats.length > 0 && (
-                              <div className="flex items-center gap-3 pt-1 pb-1">
-                                <div className="h-px flex-1 bg-border" />
-                                <span className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider">One-off</span>
-                                <div className="h-px flex-1 bg-border" />
-                              </div>
-                            )}
-                            {oneoffCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={false}
-                              activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
-                              expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
-                              movingExpense={movingExpense} setMovingExpense={setMovingExpense}
-                              movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
-                              setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
-                          </div>
+                          {viewMode === "cards" && (
+                            <div className="space-y-2">
+                              {recCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={true}
+                                activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
+                                expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
+                                movingExpense={movingExpense} setMovingExpense={setMovingExpense}
+                                movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
+                                setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
+                              {recCats.length > 0 && oneoffCats.length > 0 && (
+                                <div className="flex items-center gap-3 pt-1 pb-1">
+                                  <div className="h-px flex-1 bg-border" />
+                                  <span className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider">One-off</span>
+                                  <div className="h-px flex-1 bg-border" />
+                                </div>
+                              )}
+                              {oneoffCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={false}
+                                activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
+                                expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
+                                movingExpense={movingExpense} setMovingExpense={setMovingExpense}
+                                movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
+                                setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
+                            </div>
+                          )}
+                          {viewMode === "compact" && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                              {cats.map(cat => {
+                                const effectiveMonthly = cat.frequency === "weekly" ? (cat.allocatedAmount * 52 / 12) : cat.frequency === "fortnightly" ? (cat.allocatedAmount * 26 / 12) : cat.allocatedAmount;
+                                const pct = effectiveMonthly > 0 ? (cat.spent ?? 0) / effectiveMonthly : 0;
+                                return (
+                                  <div key={cat.id} className="bg-card border border-border rounded-lg px-3 py-2">
+                                    <div className="flex items-center gap-1.5 mb-1">
+                                      <ColorDot color={cat.color} size={7} />
+                                      <span className="text-xs font-medium text-foreground truncate">{cat.name}</span>
+                                      {cat.frequency === "fortnightly" && <span className="text-[9px] text-muted-foreground/60">/fn</span>}
+                                      {cat.frequency === "weekly" && <span className="text-[9px] text-muted-foreground/60">/wk</span>}
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                      <span className={cn("text-[11px] font-medium", (cat.spent ?? 0) > effectiveMonthly ? "text-destructive" : "text-muted-foreground")}>
+                                        {formatCurrency(cat.spent ?? 0)} / {formatCurrency(cat.allocatedAmount)}
+                                      </span>
+                                      <ProgressBar value={pct} color={(cat.spent ?? 0) > effectiveMonthly ? Colors.danger : cat.color} height={4} />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {viewMode === "list" && (
+                            <Card padding={false}>
+                              {cats.map((cat, i) => {
+                                const effectiveMonthly = cat.frequency === "weekly" ? (cat.allocatedAmount * 52 / 12) : cat.frequency === "fortnightly" ? (cat.allocatedAmount * 26 / 12) : cat.allocatedAmount;
+                                const pct = effectiveMonthly > 0 ? (cat.spent ?? 0) / effectiveMonthly : 0;
+                                return (
+                                  <div key={cat.id} className={cn("flex items-center gap-2 px-3 py-2", i < cats.length - 1 && "border-b border-border")}>
+                                    <ColorDot color={cat.color} size={6} />
+                                    <span className="text-xs font-medium text-foreground flex-1 min-w-0 truncate">{cat.name}</span>
+                                    {cat.frequency !== "monthly" && <span className="text-[9px] text-muted-foreground/60">/{cat.frequency === "fortnightly" ? "fn" : "wk"}</span>}
+                                    <div className="flex-1 max-w-24">
+                                      <div className="w-full rounded-full bg-muted overflow-hidden" style={{ height: 4 }}>
+                                        <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pct, 1) * 100}%`, backgroundColor: (cat.spent ?? 0) > effectiveMonthly ? Colors.danger : cat.color }} />
+                                      </div>
+                                    </div>
+                                    <span className={cn("text-[11px] font-semibold w-20 text-right", (cat.spent ?? 0) > effectiveMonthly ? "text-destructive" : "text-foreground")}>
+                                      {formatCurrency(cat.spent ?? 0)} / {formatCurrency(cat.allocatedAmount)}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </Card>
+                          )}
                         </div>
                       );
                     })}

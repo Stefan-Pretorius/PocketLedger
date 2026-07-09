@@ -8,7 +8,7 @@ import {
 } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { BudgetYearTabs, BudgetMonthGrid } from "../components/BudgetPicker";
-import { Plus, Trash2, Edit2, Receipt, Search, Filter, ChevronDown, Target, Repeat, ChevronRight } from "lucide-react";
+import { Plus, Trash2, Edit2, Receipt, Search, Filter, ChevronDown, Target, Repeat, LayoutGrid, List, Columns2, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -272,6 +272,8 @@ export function ExpensesPage() {
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [viewMode, setViewMode] = useState<"cards" | "compact" | "list">(() => (localStorage.getItem("expensesView") as "cards" | "compact" | "list") ?? "cards");
+  const setView = (mode: "cards" | "compact" | "list") => { setViewMode(mode); localStorage.setItem("expensesView", mode); };
   const activeBudget = budgets.find(b => b.id === activeBudgetId);
   const budgetCats = categories.filter(c => c.budgetId === activeBudgetId);
   const budgetDateRange = useMemo(() => activeBudget ? getBudgetDateRange(activeBudget) : null, [activeBudget]);
@@ -531,6 +533,16 @@ export function ExpensesPage() {
                     : `${filtered.length} expense${filtered.length !== 1 ? "s" : ""}`
                   }
                 </span>
+                <div className="flex items-center gap-1.5">
+                  {filterTab !== "transfers" && (
+                    <>
+                      <button onClick={() => setView("cards")} className={cn("p-1.5 rounded-lg transition-colors", viewMode === "cards" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60")} title="Card view"><LayoutGrid size={14} /></button>
+                      <button onClick={() => setView("compact")} className={cn("p-1.5 rounded-lg transition-colors", viewMode === "compact" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60")} title="Compact view"><Columns2 size={14} /></button>
+                      <button onClick={() => setView("list")} className={cn("p-1.5 rounded-lg transition-colors", viewMode === "list" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60")} title="List view"><List size={14} /></button>
+                      <div className="w-px h-4 bg-border mx-0.5" />
+                    </>
+                  )}
+                </div>
                 <div className="flex items-center gap-2">
                   {selectedIds.size > 0 && (
                     <>
@@ -555,194 +567,240 @@ export function ExpensesPage() {
                 action={!search ? { label: "Add Expense", onPress: () => setShowNew(true) } : undefined}
               />
             ) : (
-              <Card padding={false}>
-                {filterTab === "transfers" && pairInfo ? (
-                  <>
-                    {pairInfo.pairs.map(pair => {
-                      const pairKey = `${pair.debit.id}-${pair.credit.id}`;
-                      const expanded = expandedPairs.has(pairKey);
-                      const debitAcc = accounts.find(a => a.id === pair.debit.accountId);
-                      const creditAcc = accounts.find(a => a.id === pair.credit.accountId);
-                      return (
-                        <div key={pairKey}>
-                          <div
-                            className="flex items-center gap-3 px-4 py-3 border-b border-border"
+              viewMode === "cards" || filterTab === "transfers" ? (
+                <Card padding={false}>
+                  {filterTab === "transfers" && pairInfo ? (
+                    <>
+                      {pairInfo.pairs.map(pair => {
+                        const pairKey = `${pair.debit.id}-${pair.credit.id}`;
+                        const expanded = expandedPairs.has(pairKey);
+                        const debitAcc = accounts.find(a => a.id === pair.debit.accountId);
+                        const creditAcc = accounts.find(a => a.id === pair.credit.accountId);
+                        return (
+                          <div key={pairKey}>
+                            <div
+                              className="flex items-center gap-3 px-4 py-3 border-b border-border"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.has(pair.debit.id) && selectedIds.has(pair.credit.id)}
+                                onChange={() => {
+                                  const both = selectedIds.has(pair.debit.id) && selectedIds.has(pair.credit.id);
+                                  setSelectedIds(prev => {
+                                    const next = new Set(prev);
+                                    if (both) { next.delete(pair.debit.id); next.delete(pair.credit.id); }
+                                    else { next.add(pair.debit.id); next.add(pair.credit.id); }
+                                    return next;
+                                  });
+                                }}
+                                className="w-4 h-4 rounded border-border accent-primary flex-shrink-0 cursor-pointer"
+                              />
+                              <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-primary/10">
+                                <Repeat size={14} className="text-primary" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-foreground truncate">{pair.baseDescription}</p>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className="text-xs text-muted-foreground">
+                                    {formatCurrency(pair.debit.amount)}
+                                    {" · "}
+                                    {debitAcc?.name ?? "?"} → {creditAcc?.name ?? "?"}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs text-muted-foreground">$0.00</span>
+                                <button
+                                  onClick={() => togglePairExpand(pairKey)}
+                                  className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"
+                                >
+                                  <ChevronRight size={13} className={cn("transition-transform", expanded && "rotate-90")} />
+                                </button>
+                              </div>
+                            </div>
+                            {expanded && (
+                              <div className="bg-muted/30">
+                                {[pair.debit, pair.credit].map(leg => {
+                                  const legCat = budgetCats.find(c => c.id === leg.categoryId);
+                                  const legAcc = accounts.find(a => a.id === leg.accountId);
+                                  const legGoal = goals.find(g => g.id === leg.goalId);
+                                  return (
+                                    <div key={leg.id} className="flex items-center gap-3 pl-10 pr-4 py-2.5 border-b border-border/50">
+                                      <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                                        style={{ backgroundColor: Colors.primary + "10" }}
+                                      >
+                                        <Repeat size={12} className="text-primary/60" />
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <p className="text-xs text-foreground truncate">{leg.description}</p>
+                                        <div className="flex items-center gap-1.5 mt-0.5">
+                                          <span className="text-[10px] text-muted-foreground">{formatDate(leg.date)}</span>
+                                          {legAcc && <Badge label={legAcc.name} color={Colors.warning} variant="soft"  />}
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-1">
+                                        <span className={cn("text-xs font-semibold", leg.amount < 0 ? "text-success" : "")}>{formatCurrency(leg.amount)}</span>
+                                        <button onClick={() => setEditExp(leg)} className="p-1 rounded-lg hover:bg-muted text-muted-foreground"><Edit2 size={11} /></button>
+                                        <button onClick={() => setConfirmDelete(leg.id)} className="p-1 rounded-lg hover:bg-muted text-muted-foreground"><Trash2 size={11} /></button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {pairInfo.unmatched.map((exp, i) => {
+                        const cat = budgetCats.find(c => c.id === exp.categoryId);
+                        const acc = accounts.find(a => a.id === exp.accountId);
+                        const goal = goals.find(g => g.id === exp.goalId);
+                        return (
+                          <div key={exp.id}
+                            className={cn("flex items-center gap-3 px-4 py-3", i < pairInfo.unmatched.length - 1 && "border-b border-border")}
                           >
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(pair.debit.id) && selectedIds.has(pair.credit.id)}
-                              onChange={() => {
-                                const both = selectedIds.has(pair.debit.id) && selectedIds.has(pair.credit.id);
-                                setSelectedIds(prev => {
-                                  const next = new Set(prev);
-                                  if (both) { next.delete(pair.debit.id); next.delete(pair.credit.id); }
-                                  else { next.add(pair.debit.id); next.add(pair.credit.id); }
-                                  return next;
-                                });
-                              }}
-                              className="w-4 h-4 rounded border-border accent-primary flex-shrink-0 cursor-pointer"
-                            />
-                            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-primary/10">
-                              <Repeat size={14} className="text-primary" />
+                            <input type="checkbox" checked={selectedIds.has(exp.id)} onChange={() => toggleSelect(exp.id)}
+                              className="w-4 h-4 rounded border-border accent-primary flex-shrink-0 cursor-pointer" />
+                            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+                              style={{ backgroundColor: Colors.warning + "20" }}>
+                              <Repeat size={14} className="text-warning" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-foreground truncate">{pair.baseDescription}</p>
+                              <p className="text-sm font-medium text-foreground truncate">{exp.description}</p>
                               <div className="flex items-center gap-2 mt-0.5">
-                                <span className="text-xs text-muted-foreground">
-                                  {formatCurrency(pair.debit.amount)}
-                                  {" · "}
-                                  {debitAcc?.name ?? "?"} → {creditAcc?.name ?? "?"}
-                                </span>
+                                <span className="text-xs text-muted-foreground">{formatDate(exp.date)}</span>
+                                {acc && <Badge label={acc.name} color={Colors.warning} variant="soft"  />}
                               </div>
                             </div>
                             <div className="flex items-center gap-1">
-                              <span className="text-xs text-muted-foreground">$0.00</span>
-                              <button
-                                onClick={() => togglePairExpand(pairKey)}
-                                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"
-                              >
-                                <ChevronRight size={13} className={cn("transition-transform", expanded && "rotate-90")} />
-                              </button>
+                              <span className="text-sm font-semibold">{formatCurrency(exp.amount)}</span>
+                              <button onClick={() => setEditExp(exp)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground ml-1"><Edit2 size={13} /></button>
+                              <button onClick={() => setConfirmDelete(exp.id)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"><Trash2 size={13} /></button>
                             </div>
                           </div>
-                          {expanded && (
-                            <div className="bg-muted/30">
-                              {[pair.debit, pair.credit].map(leg => {
-                                const legCat = budgetCats.find(c => c.id === leg.categoryId);
-                                const legAcc = accounts.find(a => a.id === leg.accountId);
-                                const legGoal = goals.find(g => g.id === leg.goalId);
-                                return (
-                                  <div key={leg.id} className="flex items-center gap-3 pl-10 pr-4 py-2.5 border-b border-border/50">
-                                    <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-                                      style={{ backgroundColor: Colors.primary + "10" }}
-                                    >
-                                      <Repeat size={12} className="text-primary/60" />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-xs text-foreground truncate">{leg.description}</p>
-                                      <div className="flex items-center gap-1.5 mt-0.5">
-                                        <span className="text-[10px] text-muted-foreground">{formatDate(leg.date)}</span>
-                                        {legAcc && <Badge label={legAcc.name} color={Colors.warning} variant="soft"  />}
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-1">
-                                      <span className={cn("text-xs font-semibold", leg.amount < 0 ? "text-success" : "")}>{formatCurrency(leg.amount)}</span>
-                                      <button onClick={() => setEditExp(leg)} className="p-1 rounded-lg hover:bg-muted text-muted-foreground"><Edit2 size={11} /></button>
-                                      <button onClick={() => setConfirmDelete(leg.id)} className="p-1 rounded-lg hover:bg-muted text-muted-foreground"><Trash2 size={11} /></button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {pairInfo.unmatched.map((exp, i) => {
+                        );
+                      })}
+                    </>
+                  ) : (
+                    filtered.map((exp, i) => {
                       const cat = budgetCats.find(c => c.id === exp.categoryId);
                       const acc = accounts.find(a => a.id === exp.accountId);
                       const goal = goals.find(g => g.id === exp.goalId);
+                      const fundedByGoal = exp.fundedByGoalId != null ? goals.find(g => g.id === exp.fundedByGoalId) : undefined;
                       return (
-                        <div key={exp.id}
-                          className={cn("flex items-center gap-3 px-4 py-3", i < pairInfo.unmatched.length - 1 && "border-b border-border")}
+                        <div
+                          key={exp.id}
+                          className={cn(
+                            "flex items-center gap-3 px-4 py-3",
+                            i < filtered.length - 1 && "border-b border-border",
+                          )}
                         >
-                          <input type="checkbox" checked={selectedIds.has(exp.id)} onChange={() => toggleSelect(exp.id)}
-                            className="w-4 h-4 rounded border-border accent-primary flex-shrink-0 cursor-pointer" />
-                          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-                            style={{ backgroundColor: Colors.warning + "20" }}>
-                            <Repeat size={14} className="text-warning" />
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(exp.id)}
+                            onChange={() => toggleSelect(exp.id)}
+                            className="w-4 h-4 rounded border-border accent-primary flex-shrink-0 cursor-pointer"
+                          />
+                          <div
+                            className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+                            style={{ backgroundColor: fundedByGoal ? (fundedByGoal.color + "20") : (goal ? (goal.color + "20") : ((cat?.color ?? Colors.primary) + "20")) }}
+                          >
+                            {fundedByGoal ? <Target size={14} style={{ color: fundedByGoal.color }} /> : (goal && exp.isWithdrawal ? <Repeat size={14} style={{ color: goal.color }} /> : goal ? <Target size={14} style={{ color: goal.color }} /> : <Receipt size={14} style={{ color: cat?.color ?? Colors.primary }} />)}
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium text-foreground truncate">{exp.description}</p>
                             <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-xs text-muted-foreground">{formatDate(exp.date)}</span>
-                              {acc && <Badge label={acc.name} color={Colors.warning} variant="soft"  />}
+                              {fundedByGoal && <ColorDot color={fundedByGoal.color} size={6} />}
+                              {!fundedByGoal && goal && <ColorDot color={goal.color} size={6} />}
+                              {!fundedByGoal && !goal && cat && <ColorDot color={cat.color} size={6} />}
+                              <span className="text-xs text-muted-foreground">
+                                {goal ? `→ ${goal.name}` : (fundedByGoal ? `💰 ${fundedByGoal.name}` : (cat?.name ?? "Uncategorized"))} · {formatDate(exp.date)}
+                              </span>
+                              {exp.importedFromBank && (
+                                <Badge label="Bank" color={Colors.primary} variant="soft"  />
+                              )}
+                              {exp.budgetId == null && (
+                                <Badge label="Unallocated" color={Colors.danger} variant="soft"  />
+                              )}
+                              {goal && !exp.isWithdrawal && (
+                                <Badge label="Goal" color={goal.color} variant="soft"  />
+                              )}
+                              {goal && exp.isWithdrawal && (
+                                <Badge label="Withdrawn" color={goal.color} variant="soft" icon={Repeat} />
+                              )}
+                              {fundedByGoal && (
+                                <Badge label={fundedByGoal.name} color={fundedByGoal.color} variant="soft" />
+                              )}
+                              {acc && (
+                                <Badge label={acc.name} color={Colors.warning} variant="soft"  />
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
-                            <span className="text-sm font-semibold">{formatCurrency(exp.amount)}</span>
-                            <button onClick={() => setEditExp(exp)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground ml-1"><Edit2 size={13} /></button>
-                            <button onClick={() => setConfirmDelete(exp.id)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"><Trash2 size={13} /></button>
+                            <span className={cn("text-sm font-semibold", goal && !exp.isWithdrawal ? "text-success" : goal && exp.isWithdrawal ? "text-foreground" : "text-foreground")}>{formatCurrency(exp.amount)}</span>
+                            <button
+                              onClick={() => setEditExp(exp)}
+                              className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground ml-1"
+                            >
+                              <Edit2 size={13} />
+                            </button>
+                            <button
+                              onClick={() => setConfirmDelete(exp.id)}
+                              className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"
+                            >
+                              <Trash2 size={13} />
+                            </button>
                           </div>
                         </div>
                       );
-                    })}
-                  </>
-                ) : (
-                  filtered.map((exp, i) => {
-                    const cat = budgetCats.find(c => c.id === exp.categoryId);
-                    const acc = accounts.find(a => a.id === exp.accountId);
+                    })
+                  )}
+                </Card>
+              ) : viewMode === "compact" ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {filtered.map(exp => {
+                    const cat = categories.find(c => c.id === exp.categoryId);
                     const goal = goals.find(g => g.id === exp.goalId);
-                    const fundedByGoal = exp.fundedByGoalId != null ? goals.find(g => g.id === exp.fundedByGoalId) : undefined;
+                    const fundedByGoal = goals.find(g => g.id === exp.fundedByGoalId);
+                    const acc = accounts.find(a => a.id === exp.accountId);
                     return (
-                      <div
-                        key={exp.id}
-                        className={cn(
-                          "flex items-center gap-3 px-4 py-3",
-                          i < filtered.length - 1 && "border-b border-border",
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(exp.id)}
-                          onChange={() => toggleSelect(exp.id)}
-                          className="w-4 h-4 rounded border-border accent-primary flex-shrink-0 cursor-pointer"
-                        />
-                        <div
-                          className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-                          style={{ backgroundColor: fundedByGoal ? (fundedByGoal.color + "20") : (goal ? (goal.color + "20") : ((cat?.color ?? Colors.primary) + "20")) }}
-                        >
-                          {fundedByGoal ? <Target size={14} style={{ color: fundedByGoal.color }} /> : (goal && exp.isWithdrawal ? <Repeat size={14} style={{ color: goal.color }} /> : goal ? <Target size={14} style={{ color: goal.color }} /> : <Receipt size={14} style={{ color: cat?.color ?? Colors.primary }} />)}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-foreground truncate">{exp.description}</p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            {fundedByGoal && <ColorDot color={fundedByGoal.color} size={6} />}
-                            {!fundedByGoal && goal && <ColorDot color={goal.color} size={6} />}
-                            {!fundedByGoal && !goal && cat && <ColorDot color={cat.color} size={6} />}
-                            <span className="text-xs text-muted-foreground">
-                              {goal ? `→ ${goal.name}` : (fundedByGoal ? `💰 ${fundedByGoal.name}` : (cat?.name ?? "Uncategorized"))} · {formatDate(exp.date)}
-                            </span>
-                            {exp.importedFromBank && (
-                              <Badge label="Bank" color={Colors.primary} variant="soft"  />
-                            )}
-                            {exp.budgetId == null && (
-                              <Badge label="Unallocated" color={Colors.danger} variant="soft"  />
-                            )}
-                            {goal && !exp.isWithdrawal && (
-                              <Badge label="Goal" color={goal.color} variant="soft"  />
-                            )}
-                            {goal && exp.isWithdrawal && (
-                              <Badge label="Withdrawn" color={goal.color} variant="soft" icon={Repeat} />
-                            )}
-                            {fundedByGoal && (
-                              <Badge label={fundedByGoal.name} color={fundedByGoal.color} variant="soft" />
-                            )}
-                            {acc && (
-                              <Badge label={acc.name} color={Colors.warning} variant="soft"  />
-                            )}
+                      <div key={exp.id} className="bg-card border border-border rounded-lg px-3 py-2">
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: fundedByGoal ? (fundedByGoal.color + "20") : (goal ? (goal.color + "20") : ((cat?.color ?? Colors.primary) + "20")) }}>
+                            {fundedByGoal ? <Target size={11} style={{ color: fundedByGoal.color }} /> : (goal && exp.isWithdrawal ? <Repeat size={11} style={{ color: goal.color }} /> : goal ? <Target size={11} style={{ color: goal.color }} /> : <Receipt size={11} style={{ color: cat?.color ?? Colors.primary }} />)}
                           </div>
+                          <p className="text-xs font-medium text-foreground truncate flex-1">{exp.description}</p>
+                          <span className={cn("text-xs font-semibold", goal && !exp.isWithdrawal ? "text-success" : "text-foreground")}>{formatCurrency(exp.amount)}</span>
                         </div>
-                        <div className="flex items-center gap-1">
-                          <span className={cn("text-sm font-semibold", goal && !exp.isWithdrawal ? "text-success" : goal && exp.isWithdrawal ? "text-foreground" : "text-foreground")}>{formatCurrency(exp.amount)}</span>
-                          <button
-                            onClick={() => setEditExp(exp)}
-                            className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground ml-1"
-                          >
-                            <Edit2 size={13} />
-                          </button>
-                          <button
-                            onClick={() => setConfirmDelete(exp.id)}
-                            className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {goal && <span className="text-[9px] text-muted-foreground">→ {goal.name}</span>}
+                          {fundedByGoal && <span className="text-[9px] text-muted-foreground">💰 {fundedByGoal.name}</span>}
+                          {!goal && !fundedByGoal && cat && <span className="text-[9px] text-muted-foreground">{cat.name}</span>}
+                          <span className="text-[9px] text-muted-foreground">· {formatDate(exp.date)}</span>
+                          {exp.importedFromBank && <span className="text-[8px] px-1 py-0.5 rounded bg-primary/10 text-primary">Bank</span>}
+                          {acc && <span className="text-[8px] px-1 py-0.5 rounded bg-warning/10 text-warning">{acc.name}</span>}
                         </div>
                       </div>
                     );
-                  })
-                )}
-              </Card>
+                  })}
+                </div>
+              ) : (
+                <Card padding={false}>
+                  {filtered.map((exp, i) => {
+                    const cat = categories.find(c => c.id === exp.categoryId);
+                    const goal = goals.find(g => g.id === exp.goalId);
+                    const acc = accounts.find(a => a.id === exp.accountId);
+                    return (
+                      <div key={exp.id} className={cn("flex items-center gap-2 px-3 py-1.5", i < filtered.length - 1 && "border-b border-border")}>
+                        <input type="checkbox" checked={selectedIds.has(exp.id)} onChange={() => toggleSelect(exp.id)} className="w-3 h-3 rounded border-border accent-primary flex-shrink-0 cursor-pointer" />
+                        <p className="text-xs text-foreground truncate flex-1 min-w-0">{exp.description}</p>
+                        <span className="text-[10px] text-muted-foreground flex-shrink-0">{goal?.name ?? cat?.name ?? "Uncat"}</span>
+                        <span className={cn("text-xs font-semibold w-16 text-right flex-shrink-0", goal && !exp.isWithdrawal ? "text-success" : "text-foreground")}>{formatCurrency(exp.amount)}</span>
+                      </div>
+                    );
+                  })}
+                </Card>
+              )
             )}
           </>
         )}

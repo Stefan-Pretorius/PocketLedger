@@ -7,7 +7,7 @@ import {
   ColorPicker, ColorDot, Confirm,
 } from "../components/ui";
 import { PageHeader } from "../components/Layout";
-import { Plus, Trash2, Edit2, Target, TrendingUp } from "lucide-react";
+import { Plus, Trash2, Edit2, Target, TrendingUp, LayoutGrid, List } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -154,9 +154,12 @@ export function GoalsPage() {
   const [contributeGoal, setContributeGoal] = useState<typeof goals[0] | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
 
-  const totalSaved = goals.reduce((s, g) => s + g.currentAmount, 0);
+  const [viewMode, setViewMode] = useState<"cards" | "compact" | "list">(() => (localStorage.getItem("goalsView") as "cards" | "compact" | "list") ?? "cards");
+  const setView = (mode: "cards" | "compact" | "list") => { setViewMode(mode); localStorage.setItem("goalsView", mode); };
+
+  const totalSaved = goals.reduce((s, g) => s + (g.currentAmount || 0), 0);
   const goalsWithTarget = goals.filter(g => g.targetAmount != null && g.targetAmount > 0);
-  const totalTarget = goalsWithTarget.reduce((s, g) => s + g.targetAmount!, 0);
+  const totalTarget = goalsWithTarget.reduce((s, g) => s + (g.targetAmount || 0), 0);
 
   return (
     <div>
@@ -167,6 +170,17 @@ export function GoalsPage() {
       />
 
       <div className="px-4 sm:px-6 space-y-5 pb-6">
+        {/* View toggle */}
+        {goals.length > 0 && (
+          <div className="flex items-center justify-end">
+            <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
+              <button onClick={() => setView("cards")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "cards" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Card view"><LayoutGrid size={14} /></button>
+              <button onClick={() => setView("compact")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "compact" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Compact grid"><LayoutGrid size={12} className="scale-75" /></button>
+              <button onClick={() => setView("list")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "list" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="List view"><List size={14} /></button>
+            </div>
+          </div>
+        )}
+
         {/* Summary */}
         {goals.length > 0 && (
           <Card className="flex items-center gap-4">
@@ -197,136 +211,197 @@ export function GoalsPage() {
             action={{ label: "Create Goal", onPress: () => setShowNew(true) }}
           />
         ) : (
-          <div className="space-y-3">
-            {goals.map(g => {
-              const hasTarget = g.targetAmount != null && g.targetAmount > 0;
-              const pct = hasTarget ? g.currentAmount / g.targetAmount! : 0;
-              const completed = hasTarget && pct >= 1;
-              const contribs = expenses.filter(e => e.goalId === g.id && !e.isWithdrawal).sort((a, b) => b.date.localeCompare(a.date));
-              const withdrawals = expenses.filter(e => e.goalId === g.id && e.isWithdrawal).sort((a, b) => b.date.localeCompare(a.date));
-              const fundedBy = expenses.filter(e => e.fundedByGoalId === g.id).sort((a, b) => b.date.localeCompare(a.date));
-              const totalContribs = contribs.reduce((s, e) => s + e.amount, 0);
-              const totalWithdrawals = withdrawals.reduce((s, e) => s + e.amount, 0);
-              const showHistory = contribs.length > 0 || withdrawals.length > 0 || fundedBy.length > 0;
-              return (
-                <Card key={g.id}>
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-                        style={{ backgroundColor: g.color + "20" }}
-                      >
-                        <Target size={16} style={{ color: g.color }} />
-                      </div>
-                      <div>
+          <>
+            {viewMode === "cards" && (
+              <div className="space-y-3">
+                {goals.map(g => {
+                  const hasTarget = g.targetAmount != null && g.targetAmount > 0;
+                  const pct = hasTarget ? g.currentAmount / g.targetAmount! : 0;
+                  const completed = hasTarget && pct >= 1;
+                  const contribs = expenses.filter(e => e.goalId === g.id && !e.isWithdrawal).sort((a, b) => b.date.localeCompare(a.date));
+                  const withdrawals = expenses.filter(e => e.goalId === g.id && e.isWithdrawal).sort((a, b) => b.date.localeCompare(a.date));
+                  const fundedBy = expenses.filter(e => e.fundedByGoalId === g.id).sort((a, b) => b.date.localeCompare(a.date));
+                  const totalContribs = contribs.reduce((s, e) => s + e.amount, 0);
+                  const totalWithdrawals = withdrawals.reduce((s, e) => s + e.amount, 0);
+                  const showHistory = contribs.length > 0 || withdrawals.length > 0 || fundedBy.length > 0;
+                  return (
+                    <Card key={g.id}>
+                      <div className="flex items-start justify-between mb-3">
                         <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold text-foreground">{g.name}</p>
-                          {completed && (
-                            <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-success/20 text-success">
-                              Completed!
-                            </span>
+                          <div
+                            className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
+                            style={{ backgroundColor: g.color + "20" }}
+                          >
+                            <Target size={16} style={{ color: g.color }} />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-semibold text-foreground">{g.name}</p>
+                              {completed && (
+                                <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-success/20 text-success">
+                                  Completed!
+                                </span>
+                              )}
+                            </div>
+                            {g.description && <p className="text-xs text-muted-foreground">{g.description}</p>}
+                            {g.deadline && <p className="text-xs text-muted-foreground">By {formatDate(g.deadline)}</p>}
+                          </div>
+                        </div>
+                        <div className="flex gap-1">
+                          <button onClick={() => setEditGoal(g)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
+                            <Edit2 size={13} />
+                          </button>
+                          <button onClick={() => setConfirmDelete(g.id)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </div>
+
+                      {showHistory && (
+                        <div className="mb-2 flex items-center gap-3 text-[10px] text-muted-foreground">
+                          <span>Contributed <span className="text-success font-medium">+{formatCurrency(totalContribs)}</span></span>
+                          {totalWithdrawals > 0 && (
+                            <>
+                              <span>Withdrawn <span className="text-destructive font-medium">-{formatCurrency(totalWithdrawals)}</span></span>
+                            </>
                           )}
+                          <span>Net <span className="text-foreground font-medium">{formatCurrency(totalContribs - totalWithdrawals)}</span></span>
                         </div>
-                        {g.description && <p className="text-xs text-muted-foreground">{g.description}</p>}
-                        {g.deadline && <p className="text-xs text-muted-foreground">By {formatDate(g.deadline)}</p>}
-                      </div>
-                    </div>
-                    <div className="flex gap-1">
-                      <button onClick={() => setEditGoal(g)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
-                        <Edit2 size={13} />
-                      </button>
-                      <button onClick={() => setConfirmDelete(g.id)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  </div>
-
-                  {showHistory && (
-                    <div className="mb-2 flex items-center gap-3 text-[10px] text-muted-foreground">
-                      <span>Contributed <span className="text-success font-medium">+{formatCurrency(totalContribs)}</span></span>
-                      {totalWithdrawals > 0 && (
-                        <>
-                          <span>Withdrawn <span className="text-destructive font-medium">-{formatCurrency(totalWithdrawals)}</span></span>
-                        </>
                       )}
-                      <span>Net <span className="text-foreground font-medium">{formatCurrency(totalContribs - totalWithdrawals)}</span></span>
-                    </div>
-                  )}
 
-                  <div className="space-y-1.5">
-                    {hasTarget ? (
-                      <>
-                        <ProgressBar value={pct} color={completed ? Colors.success : g.color} height={8} />
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-muted-foreground">
-                            {formatCurrency(g.currentAmount)} saved
-                          </span>
-                          <span className="text-xs font-medium" style={{ color: g.color }}>
-                            {Math.round(pct * 100)}% · {formatCurrency(g.targetAmount! - g.currentAmount)} to go
-                          </span>
-                        </div>
-                      </>
-                    ) : (
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-muted-foreground">No target set</span>
-                        <span className="text-xs font-medium text-foreground">{formatCurrency(g.currentAmount)} saved</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {!completed && (
-                    <div className="mt-3">
-                      <Button
-                        label="Add Contribution"
-                        onClick={() => setContributeGoal(g)}
-                        variant="secondary"
-                        size="sm"
-                        icon={TrendingUp}
-                      />
-                    </div>
-                  )}
-
-                  {showHistory && (
-                    <div className="mt-3 pt-3 border-t border-border">
-                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">History ({contribs.length + withdrawals.length + fundedBy.length})</p>
-                      <div className="space-y-1">
-                        {contribs.slice(0, 5).map(e => (
-                          <div key={e.id} className="flex items-center justify-between text-xs">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-muted-foreground flex-shrink-0">{formatDate(e.date)}</span>
-                              <span className="text-foreground truncate">{e.description}</span>
+                      <div className="space-y-1.5">
+                        {hasTarget ? (
+                          <>
+                            <ProgressBar value={pct} color={completed ? Colors.success : g.color} height={8} />
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-muted-foreground">
+                                {formatCurrency(g.currentAmount)} saved
+                              </span>
+                              <span className="text-xs font-medium" style={{ color: g.color }}>
+                                {Math.round(pct * 100)}% · {formatCurrency(g.targetAmount! - g.currentAmount)} to go
+                              </span>
                             </div>
-                            <span className="text-success font-medium flex-shrink-0 ml-2">+{formatCurrency(e.amount)}</span>
+                          </>
+                        ) : (
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-muted-foreground">No target set</span>
+                            <span className="text-xs font-medium text-foreground">{formatCurrency(g.currentAmount)} saved</span>
                           </div>
-                        ))}
-                        {withdrawals.slice(0, 5).map(e => (
-                          <div key={e.id} className="flex items-center justify-between text-xs">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-muted-foreground flex-shrink-0">{formatDate(e.date)}</span>
-                              <span className="text-foreground truncate">{e.description}</span>
-                            </div>
-                            <span className="font-medium flex-shrink-0 ml-2" style={{ color: g.color }}>-{formatCurrency(e.amount)}</span>
-                          </div>
-                        ))}
-                        {fundedBy.slice(0, 5).map(e => (
-                          <div key={e.id} className="flex items-center justify-between text-xs">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-muted-foreground flex-shrink-0">{formatDate(e.date)}</span>
-                              <span className="text-foreground truncate">{e.description}</span>
-                            </div>
-                            <span className="font-medium flex-shrink-0 ml-2" style={{ color: g.color, opacity: 0.7 }}>{formatCurrency(e.amount)}</span>
-                          </div>
-                        ))}
-                        {(contribs.length + withdrawals.length + fundedBy.length) > 15 && (
-                          <p className="text-[10px] text-muted-foreground text-center pt-1">+{contribs.length + withdrawals.length + fundedBy.length - 15} more</p>
                         )}
                       </div>
+
+                      {!completed && (
+                        <div className="mt-3">
+                          <Button
+                            label="Add Contribution"
+                            onClick={() => setContributeGoal(g)}
+                            variant="secondary"
+                            size="sm"
+                            icon={TrendingUp}
+                          />
+                        </div>
+                      )}
+
+                      {showHistory && (
+                        <div className="mt-3 pt-3 border-t border-border">
+                          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">History ({contribs.length + withdrawals.length + fundedBy.length})</p>
+                          <div className="space-y-1">
+                            {contribs.slice(0, 5).map(e => (
+                              <div key={e.id} className="flex items-center justify-between text-xs">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="text-muted-foreground flex-shrink-0">{formatDate(e.date)}</span>
+                                  <span className="text-foreground truncate">{e.description}</span>
+                                </div>
+                                <span className="text-success font-medium flex-shrink-0 ml-2">+{formatCurrency(e.amount)}</span>
+                              </div>
+                            ))}
+                            {withdrawals.slice(0, 5).map(e => (
+                              <div key={e.id} className="flex items-center justify-between text-xs">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="text-muted-foreground flex-shrink-0">{formatDate(e.date)}</span>
+                                  <span className="text-foreground truncate">{e.description}</span>
+                                </div>
+                                <span className="font-medium flex-shrink-0 ml-2" style={{ color: g.color }}>-{formatCurrency(e.amount)}</span>
+                              </div>
+                            ))}
+                            {fundedBy.slice(0, 5).map(e => (
+                              <div key={e.id} className="flex items-center justify-between text-xs">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="text-muted-foreground flex-shrink-0">{formatDate(e.date)}</span>
+                                  <span className="text-foreground truncate">{e.description}</span>
+                                </div>
+                                <span className="font-medium flex-shrink-0 ml-2" style={{ color: g.color, opacity: 0.7 }}>{formatCurrency(e.amount)}</span>
+                              </div>
+                            ))}
+                            {(contribs.length + withdrawals.length + fundedBy.length) > 15 && (
+                              <p className="text-[10px] text-muted-foreground text-center pt-1">+{contribs.length + withdrawals.length + fundedBy.length - 15} more</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+            {viewMode === "compact" && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {goals.map(g => {
+                  const hasTarget = g.targetAmount != null && g.targetAmount > 0;
+                  const pct = hasTarget ? g.currentAmount / g.targetAmount! : 0;
+                  const completed = hasTarget && pct >= 1;
+                  return (
+                    <div key={g.id} className="bg-card border border-border rounded-lg p-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: g.color + "20" }}>
+                          <Target size={12} style={{ color: g.color }} />
+                        </div>
+                        <p className="text-sm font-semibold text-foreground truncate">{g.name}</p>
+                        {completed && <span className="text-[9px] font-medium px-1 py-0.5 rounded-full bg-success/20 text-success">Done</span>}
+                      </div>
+                      {hasTarget ? (
+                        <>
+                          <ProgressBar value={pct} color={completed ? Colors.success : g.color} height={4} />
+                          <div className="flex items-center justify-between mt-1">
+                            <span className="text-[10px] text-muted-foreground">{formatCurrency(g.currentAmount)}</span>
+                            <span className="text-[10px] font-medium" style={{ color: g.color }}>{Math.round(pct * 100)}%</span>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">{formatCurrency(g.currentAmount)} saved</p>
+                      )}
                     </div>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
+                  );
+                })}
+              </div>
+            )}
+            {viewMode === "list" && (
+              <Card padding={false}>
+                {goals.map((g, i) => {
+                  const hasTarget = g.targetAmount != null && g.targetAmount > 0;
+                  const pct = hasTarget ? g.currentAmount / g.targetAmount! : 0;
+                  const completed = hasTarget && pct >= 1;
+                  return (
+                    <div key={g.id} className={cn("flex items-center gap-3 px-3 py-2", i < goals.length - 1 && "border-b border-border")}>
+                      <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: g.color + "20" }}>
+                        <Target size={10} style={{ color: g.color }} />
+                      </div>
+                      <p className="text-xs font-medium text-foreground flex-1 min-w-0 truncate">{g.name}</p>
+                      {hasTarget && (
+                        <div className="flex-1 max-w-24">
+                          <div className="w-full rounded-full bg-muted overflow-hidden" style={{ height: 4 }}>
+                            <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pct, 1) * 100}%`, backgroundColor: completed ? Colors.success : g.color }} />
+                          </div>
+                        </div>
+                      )}
+                      <span className="text-xs font-semibold text-foreground w-20 text-right">{formatCurrency(g.currentAmount)}</span>
+                      {hasTarget && <span className="text-[10px] text-muted-foreground w-12 text-right">{Math.round(pct * 100)}%</span>}
+                    </div>
+                  );
+                })}
+              </Card>
+            )}
+          </>
         )}
       </div>
 

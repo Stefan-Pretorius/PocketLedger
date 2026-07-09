@@ -191,6 +191,25 @@ export interface PortfolioSummary {
   holdingSummaries: HoldingSummary[];
 }
 
+export interface ScenarioConfig {
+  id: number;
+  name: string;
+  owner?: "self" | "partner" | "joint";
+  description?: string;
+  /** Per-holding overrides. Omitted holdings use their default values from savedConfigs. */
+  holdingOverrides: {
+    holdingId: number;
+    annualReturn?: number;
+    monthlyContribution?: number;
+    included?: boolean;
+    /** Override market value for this scenario (e.g. to simulate buying more) */
+    marketValueOverride?: number;
+  }[];
+  oneOffInvestments: { month: number; amount: number }[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ImportedStatement {
   id: number;
   fileName: string;

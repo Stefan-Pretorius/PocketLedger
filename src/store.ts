@@ -3,7 +3,7 @@ import type {
   Account, Budget, Category, Expense, Goal, RecurringExpense,
   IncomeSource, BankMappingRule, BudgetSummary,
   Holding, HoldingTransaction, HoldingSummary, PortfolioSummary,
-  ImportedStatement,
+  ImportedStatement, ScenarioConfig,
 } from "./types";
 import { getBudgetDateRange, getRecurringDatesInMonth, monthlyIncomeAmount, monthlyCategoryAmount } from "./utils";
 import { autoSaveToDir } from "./backup";
@@ -22,7 +22,12 @@ export interface StoreData {
   holdingTransactions: HoldingTransaction[];
   importedStatements: ImportedStatement[];
   budgetSections: BudgetSection[];
+  scenarios: ScenarioConfig[];
   lastRefreshedAt?: number;
+  selfAge?: number;
+  selfRetirementAge?: number;
+  partnerAge?: number;
+  partnerRetirementAge?: number;
 }
 
 const STORAGE_KEY = "pocketledger_data";
@@ -49,7 +54,7 @@ function load(): StoreData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [], lastRefreshedAt: undefined };
+  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [], scenarios: [], lastRefreshedAt: undefined, selfAge: undefined, selfRetirementAge: undefined, partnerAge: undefined, partnerRetirementAge: undefined };
 }
 
 function save(data: StoreData) {
@@ -71,8 +76,9 @@ function snapshot(s: AppState): StoreData {
     budgets: s.budgets, categories: s.categories, expenses: s.expenses,
     goals: s.goals, recurring: s.recurring, incomeSources: s.incomeSources,
     bankRules: s.bankRules, holdings: s.holdings, holdingTransactions: s.holdingTransactions,
-    importedStatements: s.importedStatements, budgetSections: s.budgetSections,
+    importedStatements: s.importedStatements, budgetSections: s.budgetSections, scenarios: s.scenarios,
     lastRefreshedAt: s.lastRefreshedAt,
+    selfAge: s.selfAge, selfRetirementAge: s.selfRetirementAge, partnerAge: s.partnerAge, partnerRetirementAge: s.partnerRetirementAge,
   };
 }
 
@@ -211,6 +217,17 @@ interface AppState extends StoreData {
   exportData: () => string;
   importData: (json: string) => void;
   lastRefreshedAt: number | undefined;
+  selfAge: number | undefined;
+  selfRetirementAge: number | undefined;
+  partnerAge: number | undefined;
+  partnerRetirementAge: number | undefined;
+
+  updateAgeSettings: (settings: { selfAge?: number; selfRetirementAge?: number; partnerAge?: number; partnerRetirementAge?: number }) => void;
+
+  scenarios: ScenarioConfig[];
+  createScenario: (s: Omit<ScenarioConfig, "id" | "createdAt" | "updatedAt">) => ScenarioConfig;
+  updateScenario: (id: number, s: Partial<ScenarioConfig>) => void;
+  deleteScenario: (id: number) => void;
 }
 
 export const useStore = create<AppState>()((set, get) => ({
@@ -218,7 +235,7 @@ export const useStore = create<AppState>()((set, get) => ({
   recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [],
   importedStatements: [],
   budgetSections: [],
-  activeBudgetId: null, loading: true, lastRefreshedAt: undefined,
+  activeBudgetId: null, loading: true, lastRefreshedAt: undefined, selfAge: undefined, selfRetirementAge: undefined, partnerAge: undefined, partnerRetirementAge: undefined, scenarios: [],
 
   init: () => {
     const data = load();
@@ -275,7 +292,22 @@ export const useStore = create<AppState>()((set, get) => ({
     });
     if (hadOrphans) changed = true;
 
-    const migrated = { ...data, budgetSections: data.budgetSections ?? [], accounts, budgets, categories, expenses, recurring, holdings: data.holdings ?? [], holdingTransactions: data.holdingTransactions ?? [], importedStatements: data.importedStatements ?? [] };
+    // Fix NaN currentAmount on goals
+    const goals = (data.goals ?? []).map(g => {
+      if (isNaN(g.currentAmount)) {
+        changed = true;
+        return { ...g, currentAmount: 0 };
+      }
+      return g;
+    });
+
+    // Migrate legacy userAge/retirementAge → selfAge/selfRetirementAge
+    const selfAge = data.selfAge ?? (data as any).userAge;
+    const selfRetirementAge = data.selfRetirementAge ?? (data as any).retirementAge;
+    if ((data as any).userAge != null && data.selfAge == null) changed = true;
+    if ((data as any).retirementAge != null && data.selfRetirementAge == null) changed = true;
+
+    const migrated = { ...data, budgetSections: data.budgetSections ?? [], scenarios: data.scenarios ?? [], accounts, budgets, categories, expenses, goals, recurring, holdings: data.holdings ?? [], holdingTransactions: data.holdingTransactions ?? [], importedStatements: data.importedStatements ?? [], selfAge, selfRetirementAge };
     if (changed) save(migrated);
     set({ ...migrated, activeBudgetId: budgets[0]?.id ?? null, loading: false });
   },
@@ -451,7 +483,7 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   createGoal: (g) => {
-    const goal: Goal = { ...g, id: nextId(), createdAt: now() };
+    const goal: Goal = { ...g, currentAmount: isNaN(g.currentAmount) ? 0 : g.currentAmount, id: nextId(), createdAt: now() };
     const goals = [...get().goals, goal];
     set({ goals });
     save({ ...snapshot(get()), goals });
@@ -459,7 +491,9 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   updateGoal: (id, g) => {
-    set(s => ({ goals: s.goals.map(x => x.id === id ? { ...x, ...g } : x) }));
+    const patch = { ...g };
+    if ("currentAmount" in patch) patch.currentAmount = isNaN(patch.currentAmount!) ? 0 : patch.currentAmount!;
+    set(s => ({ goals: s.goals.map(x => x.id === id ? { ...x, ...patch } : x) }));
     save(snapshot(get()));
   },
 
@@ -558,6 +592,8 @@ export const useStore = create<AppState>()((set, get) => ({
           unmatched.push(rec.description);
           continue;
         }
+        // Find the linked category so the expense isn't uncategorized
+        const linkedCat = budgetCats.find(c => c.linkedGoalId === rec.goalId);
         for (const date of dates) {
           const alreadyExists = expenses.some(
             e => e.budgetId === budgetId &&
@@ -575,6 +611,7 @@ export const useStore = create<AppState>()((set, get) => ({
             accountId: rec.accountId,
             notes: rec.notes,
             goalId: goal.id,
+            categoryId: linkedCat?.id,
             importedFromBank: false,
           });
           get().updateGoal(goal.id, { currentAmount: goal.currentAmount + rec.amount });
@@ -632,7 +669,7 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   copyBudget: (sourceBudgetId, targetMonth, targetYear, applyRecurringAfter) => {
-    const { budgets, categories } = get();
+    const { budgets, categories, budgetSections } = get();
     const source = budgets.find(b => b.id === sourceBudgetId);
     if (!source) throw new Error("Source budget not found");
 
@@ -648,7 +685,20 @@ export const useStore = create<AppState>()((set, get) => ({
     set(s => ({ budgets: updatedBudgets, activeBudgetId: newBudget.id }));
     save({ ...snapshot(get()), budgets: updatedBudgets });
 
-    // Copy categories
+    // Copy budget sections (build oldId -> newId map)
+    const sectionIdMap = new Map<number, number>();
+    const sourceSections = budgetSections.filter(s => s.budgetId === sourceBudgetId);
+    for (const sec of sourceSections) {
+      const newSec = get().createBudgetSection({
+        budgetId: newBudget.id,
+        name: sec.name,
+        color: sec.color,
+        sortOrder: sec.sortOrder,
+      });
+      sectionIdMap.set(sec.id, newSec.id);
+    }
+
+    // Copy categories (map sectionId to new section IDs)
     const sourceCats = categories.filter(c => c.budgetId === sourceBudgetId);
     for (const cat of sourceCats) {
       get().createCategory({
@@ -659,7 +709,7 @@ export const useStore = create<AppState>()((set, get) => ({
         icon: cat.icon,
         isRounding: cat.isRounding,
         frequency: cat.frequency,
-        sectionId: cat.sectionId,
+        sectionId: cat.sectionId != null ? (sectionIdMap.get(cat.sectionId) ?? undefined) : undefined,
         linkedGoalId: cat.linkedGoalId,
       });
     }
@@ -1388,6 +1438,28 @@ export const useStore = create<AppState>()((set, get) => ({
     }
   },
 
+  updateAgeSettings: (settings) => {
+    set(settings);
+    save(snapshot(get()));
+  },
+
+  createScenario: (s) => {
+    const sc: ScenarioConfig = { ...s, id: nextId(), createdAt: now(), updatedAt: now() };
+    set(st => ({ scenarios: [...(st.scenarios ?? []), sc] }));
+    save(snapshot(get()));
+    return sc;
+  },
+
+  updateScenario: (id, patch) => {
+    set(st => ({ scenarios: (st.scenarios ?? []).map(s => s.id === id ? { ...s, ...patch, updatedAt: now() } : s) }));
+    save(snapshot(get()));
+  },
+
+  deleteScenario: (id) => {
+    set(st => ({ scenarios: (st.scenarios ?? []).filter(s => s.id !== id) }));
+    save(snapshot(get()));
+  },
+
   exportData: () => {
     const s = get();
     return JSON.stringify({
@@ -1397,6 +1469,9 @@ export const useStore = create<AppState>()((set, get) => ({
       bankRules: s.bankRules, holdings: s.holdings, holdingTransactions: s.holdingTransactions,
       importedStatements: s.importedStatements,
       budgetSections: s.budgetSections,
+      scenarios: s.scenarios,
+      selfAge: s.selfAge, selfRetirementAge: s.selfRetirementAge,
+      partnerAge: s.partnerAge, partnerRetirementAge: s.partnerRetirementAge,
       exportedAt: now(),
     }, null, 2);
   },
@@ -1420,6 +1495,10 @@ export const useStore = create<AppState>()((set, get) => ({
       holdingTransactions: data.holdingTransactions ?? [],
       importedStatements: data.importedStatements ?? [],
       budgetSections: data.budgetSections ?? [],
+      scenarios: data.scenarios ?? [],
+      selfAge: data.selfAge ?? (data as any).userAge,
+      selfRetirementAge: data.selfRetirementAge ?? (data as any).retirementAge,
+      partnerAge: data.partnerAge, partnerRetirementAge: data.partnerRetirementAge,
     };
     if (imported.accounts.length === 0) {
       imported.accounts = [

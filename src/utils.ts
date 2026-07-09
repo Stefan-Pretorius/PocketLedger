@@ -1,4 +1,5 @@
 export function formatCurrency(amount: number): string {
+  if (isNaN(amount)) return "$0.00";
   return new Intl.NumberFormat("en-AU", {
     style: "currency",
     currency: "AUD",

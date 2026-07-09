@@ -8,6 +8,7 @@ import { BudgetPage } from "./pages/Budget";
 import { ExpensesPage } from "./pages/Expenses";
 import { GoalsPage } from "./pages/Goals";
 import { InvestmentsPage } from "./pages/Investments";
+import { ScenariosPage } from "./pages/Scenarios";
 import { TrendsPage } from "./pages/Trends";
 import { StatementsPage } from "./pages/Statements";
 import { SettingsPage } from "./pages/Settings";
@@ -40,6 +41,7 @@ function App() {
           <Route path="/expenses" component={ExpensesPage} />
           <Route path="/goals" component={GoalsPage} />
           <Route path="/investments" component={InvestmentsPage} />
+          <Route path="/scenarios" component={ScenariosPage} />
           <Route path="/trends" component={TrendsPage} />
           <Route path="/statements" component={StatementsPage} />
           <Route path="/settings" component={SettingsPage} />

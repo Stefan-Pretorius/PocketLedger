@@ -250,7 +250,7 @@ function AccountModal({
 }
 
 export function SettingsPage() {
-  const { budgets, categories, expenses, goals, accounts, bankRules, deleteBankRule, deleteAccount, exportData, importData } = useStore();
+  const { budgets, categories, expenses, goals, accounts, bankRules, deleteBankRule, deleteAccount, exportData, importData, selfAge, selfRetirementAge, partnerAge, partnerRetirementAge, updateAgeSettings } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
   const [showBankRule, setShowBankRule] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
@@ -484,6 +484,51 @@ export function SettingsPage() {
               </Card>
             ))}
           </div>
+        </div>
+
+        {/* Retirement planning */}
+        <div>
+          <SectionHeader title="Retirement Planning" />
+          <Card className="space-y-3">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-warning/10 flex items-center justify-center flex-shrink-0">
+                <SettingsIcon size={15} className="text-warning" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-muted-foreground">
+                  Set ages for yourself and your partner. The withdrawal phase in projections will use these ages rather than the default $1M trigger. Holdings set to "super" type are treated as your balance; use the owner field on holdings to assign them.
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-3 p-3 rounded-lg bg-accent/30">
+                <p className="text-xs font-semibold text-foreground">You</p>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <Input label="Age" type="number" value={selfAge != null ? String(selfAge) : ""}
+                      onChange={v => updateAgeSettings({ selfAge: parseInt(v) || undefined })} placeholder="e.g. 30" />
+                  </div>
+                  <div className="flex-1">
+                    <Input label="Retirement Age" type="number" value={selfRetirementAge != null ? String(selfRetirementAge) : ""}
+                      onChange={v => updateAgeSettings({ selfRetirementAge: parseInt(v) || undefined })} placeholder="e.g. 60" />
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-3 p-3 rounded-lg bg-accent/30">
+                <p className="text-xs font-semibold text-foreground">Partner</p>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <Input label="Age" type="number" value={partnerAge != null ? String(partnerAge) : ""}
+                      onChange={v => updateAgeSettings({ partnerAge: parseInt(v) || undefined })} placeholder="e.g. 28" />
+                  </div>
+                  <div className="flex-1">
+                    <Input label="Retirement Age" type="number" value={partnerRetirementAge != null ? String(partnerRetirementAge) : ""}
+                      onChange={v => updateAgeSettings({ partnerRetirementAge: parseInt(v) || undefined })} placeholder="e.g. 60" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Card>
         </div>
 
         {/* Bank accounts */}

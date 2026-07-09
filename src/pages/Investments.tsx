@@ -10,7 +10,7 @@ import { PageHeader } from "../components/Layout";
 import {
   Plus, Trash2, TrendingUp, TrendingDown, DollarSign,
   BarChart3, Wallet, Bitcoin, Activity, PieChart, ChevronRight,
-  RefreshCw, Sparkles, User, Users,
+  RefreshCw, Sparkles, User, Users, LayoutGrid, List,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -899,11 +899,57 @@ function getDefaultConfig(summaries: { holding: Holding; marketValue: number }[]
 function monthsToTarget(
   configs: { marketValue: number; monthlyContribution: number; annualReturn: number }[],
   target: number,
+  oneOff?: { month: number; amount: number },
 ): number {
   const monthlyRates = configs.map(c => c.annualReturn / 100 / 12);
   let values = configs.map(c => c.marketValue);
   let total = values.reduce((a, b) => a + b, 0);
   if (total >= target) return 0;
+  // Two-phase if one-off investment specified
+  if (oneOff && oneOff.amount > 0 && oneOff.month > 0) {
+    // Phase 1: compound to oneOff.month
+    let lo = 1, hi = Math.max(oneOff.month, 2400);
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      let sum = 0;
+      for (let i = 0; i < configs.length; i++) {
+        const r = monthlyRates[i];
+        const PV = configs[i].marketValue;
+        const PMT = configs[i].monthlyContribution;
+        if (mid <= oneOff.month) {
+          if (r > 0) sum += PV * Math.pow(1 + r, mid) + PMT * (Math.pow(1 + r, mid) - 1) / r;
+          else sum += PV + PMT * mid;
+        } else {
+          // Phase 1: compound to oneOff.month
+          let v = r > 0 ? PV * Math.pow(1 + r, oneOff.month) + PMT * (Math.pow(1 + r, oneOff.month) - 1) / r : PV + PMT * oneOff.month;
+          // Add lump sum (distribute proportionally to start values)
+          v += oneOff.amount * (configs[i].marketValue / configs.reduce((a, c) => a + c.marketValue, 0));
+          // Phase 2: continue to mid
+          const n2 = mid - oneOff.month;
+          if (r > 0) sum += v * Math.pow(1 + r, n2) + PMT * (Math.pow(1 + r, n2) - 1) / r;
+          else sum += v + PMT * n2;
+        }
+      }
+      if (sum >= target) { hi = mid; } else { lo = mid + 1; }
+    }
+    // Linear refinement
+    values = configs.map(c => c.marketValue);
+    for (let m = 1; m <= lo; m++) {
+      total = 0;
+      for (let i = 0; i < configs.length; i++) {
+        values[i] = values[i] * (1 + monthlyRates[i]) + configs[i].monthlyContribution;
+        total += values[i];
+      }
+      if (m === oneOff.month) {
+        const lump = oneOff.amount;
+        const weights = values.map(v => v / total);
+        for (let i = 0; i < configs.length; i++) values[i] += lump * weights[i];
+        total += lump;
+      }
+      if (total >= target) return m;
+    }
+    return Infinity;
+  }
   let lo = 1, hi = 2400;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
@@ -953,12 +999,17 @@ function runMonteCarlo(
   targetValue: number,
   options?: {
     simulations?: number; stdDevPct?: number; withdrawalRatePct?: number; inflationPct?: number;
+    oneOffInvestments?: { month: number; amount: number }[];
+    /** When set, withdrawal phase activates at this month (age-based) instead of only when target reached */
+    retireFromMonth?: number;
   },
 ): { points: McPoint[]; holdingLines: McHoldingLine[]; medianMonths: number | null } {
   const sims = options?.simulations ?? 500;
   const stdDev = options?.stdDevPct ?? 15;
   const withdrawalRate = options?.withdrawalRatePct;
   const inflation = options?.inflationPct ?? 0;
+  const oneOffs = options?.oneOffInvestments ?? [];
+  const retireFromMonth = options?.retireFromMonth;
   const totalYears = Math.ceil(totalMonths / 12);
   const nh = holdings.length;
 
@@ -985,7 +1036,22 @@ function runMonteCarlo(
 
     let isWithdrawing = false;
     for (let m = 1; m <= totalMonths; m++) {
-      if (!isWithdrawing && withdrawalRate != null && aggVals[m - 1] >= targetValue) isWithdrawing = true;
+      if (!isWithdrawing) {
+        if (withdrawalRate != null) {
+          // Activate at retirement age (when set) or on target reached (fallback)
+          if (retireFromMonth != null ? m >= retireFromMonth : aggVals[m - 1] >= targetValue) {
+            isWithdrawing = true;
+          }
+        }
+      }
+      // Distribute one-off investments proportionally
+      const oneOff = oneOffs.find(o => o.month === m);
+      if (oneOff) {
+        const totalVal = vals.reduce((a, b) => a + b, 0);
+        if (totalVal > 0) {
+          for (let hi = 0; hi < nh; hi++) vals[hi] += oneOff.amount * (vals[hi] / totalVal);
+        }
+      }
       const yi = Math.floor((m - 1) / 12);
       for (let hi = 0; hi < nh; hi++) {
         const monthlyR = Math.pow(1 + annRets[hi][yi] / 100, 1 / 12) - 1;
@@ -1125,15 +1191,21 @@ function MonteCarloChart({ data, target, holdingLines, milestones, yearRange, ma
 
 // ─── Scenario Chart (What If) ──────────────────────────────────────────────
 
-function ScenarioChart({ configs, adjustForInflation, showWithdrawalPhase, yearRange, maxProjYears, visibleHoldingNames }: {
+function ScenarioChart({ configs, adjustForInflation, showWithdrawalPhase, yearRange, maxProjYears, visibleHoldingNames, oneOffInvestments }: {
   configs: { holdingId: number; marketValue: number; monthlyContribution: number; annualReturn: number }[];
   adjustForInflation: boolean;
   showWithdrawalPhase: boolean;
   yearRange: { start: number; end: number } | null;
   maxProjYears: number;
   visibleHoldingNames?: Set<string>;
+  oneOffInvestments?: { month: number; amount: number }[];
 }) {
   const holdings = useStore(s => s.holdings);
+  const userAge = useStore(s => s.selfAge);
+  const retirementAge = useStore(s => s.selfRetirementAge);
+  const retireFromMonth = (userAge != null && retirementAge != null && retirementAge > userAge)
+    ? (retirementAge - userAge) * 12
+    : undefined;
   const scPoints = useMemo(() => {
     const target = 1_000_000;
     const portfolioValue = configs.reduce((s, h) => s + h.marketValue, 0);
@@ -1153,6 +1225,8 @@ function ScenarioChart({ configs, adjustForInflation, showWithdrawalPhase, yearR
       simulations: 500, stdDevPct: 15,
       withdrawalRatePct: showWithdrawalPhase ? 4 : undefined,
       inflationPct: inflation,
+      oneOffInvestments,
+      retireFromMonth: showWithdrawalPhase ? retireFromMonth : undefined,
     });
     if (medianMonths == null) return null;
     const ms: { month: number; label: string; p10: string; p50: string; p90: string }[] = [];
@@ -1168,7 +1242,7 @@ function ScenarioChart({ configs, adjustForInflation, showWithdrawalPhase, yearR
       }
     }
     return { points, holdingLines, milestones: ms };
-  }, [configs, adjustForInflation, showWithdrawalPhase, holdings]);
+  }, [configs, adjustForInflation, showWithdrawalPhase, holdings, retireFromMonth]);
 
   if (!scPoints) return null;
   return (
@@ -1189,6 +1263,8 @@ function ScenarioChart({ configs, adjustForInflation, showWithdrawalPhase, yearR
 
 function MillionaireProjection({ summaries }: { summaries: { holding: Holding; marketValue: number }[] }) {
   const recurring = useStore(s => s.recurring);
+  const userAge = useStore(s => s.selfAge);
+  const retirementAge = useStore(s => s.selfRetirementAge);
   const [savedConfigs, setSavedConfigs] = useState<Record<number, PerHoldingConfig>>(() => {
     const loaded = loadProjectionConfigs();
     const merged = { ...getDefaultConfig(summaries), ...loaded };
@@ -1211,10 +1287,21 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
   const [collapsed, setCollapsed] = useState(true);
   const [showWhatIf, setShowWhatIf] = useState(false);
   const [scenarioConfigs, setScenarioConfigs] = useState<Record<number, PerHoldingConfig>>({});
+  const [wiUniformGrowth, setWiUniformGrowth] = useState(false);
+  const [wiUniformReturn, setWiUniformReturn] = useState("");
+  const [wiOneOffAmount, setWiOneOffAmount] = useState("");
+  const [wiOneOffYear, setWiOneOffYear] = useState("2");
   const [adjustForInflation, setAdjustForInflation] = useState(false);
   const [showWithdrawalPhase, setShowWithdrawalPhase] = useState(false);
   const [yearRange, setYearRange] = useState<{ start: number; end: number } | null>({ start: 0, end: 20 });
   const MILESTONE_YEARS = [5, 10, 15, 20];
+
+  // Quick Scenario state
+  const [qsReturn, setQsReturn] = useState("");
+  const [qsOneOffAmount, setQsOneOffAmount] = useState("");
+  const [qsOneOffNow, setQsOneOffNow] = useState(true);
+  const [qsOneOffYear, setQsOneOffYear] = useState("2");
+  const [qsResult, setQsResult] = useState<{ scMonths: number; baseMonths: number; milestones: { year: number; base: number; sc: number }[] } | null>(null);
 
   const updateScenarioConfig = (id: number, patch: Partial<PerHoldingConfig>) => {
     setScenarioConfigs(prev => {
@@ -1290,6 +1377,9 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
     : 0;
 
   const maxProjYears = 60;
+  const retireFromMonth = (userAge != null && retirementAge != null && retirementAge > userAge)
+    ? (retirementAge - userAge) * 12
+    : undefined;
   const projection = useMemo(() => {
     const target = 1_000_000;
     if (includedHoldings.length === 0) return null;
@@ -1305,6 +1395,7 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
       simulations: 500, stdDevPct: 15,
       withdrawalRatePct: showWithdrawalPhase ? 4 : undefined,
       inflationPct: inflation,
+      retireFromMonth: showWithdrawalPhase ? retireFromMonth : undefined,
     });
 
     if (medianMonths == null) return { years: 0, months: 0, message: "Not reachable with current settings" as string | undefined, monteCarlo: null, holdingLines: [], milestones: undefined as any };
@@ -1326,13 +1417,16 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
     return {
       years: Math.floor(medianMonths / 12),
       months: medianMonths % 12,
-      months: medianMonths,
+      totalMonths: medianMonths,
       monteCarlo: points,
       holdingLines,
       milestones: ms,
       message: undefined as string | undefined,
+      retireIncome: (retireFromMonth != null && retireFromMonth < points.length && points[retireFromMonth].p50 > 0)
+        ? formatCurrency(points[retireFromMonth].p50 * 0.04 / 12)
+        : undefined,
     };
-  }, [includedHoldings, adjustForInflation, showWithdrawalPhase]);
+  }, [includedHoldings, adjustForInflation, showWithdrawalPhase, retireFromMonth]);
 
   const totalSuper = summaries.filter(s => s.holding.type === "super").reduce((s, h) => s + h.marketValue, 0);
 
@@ -1367,7 +1461,7 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
               showWithdrawalPhase
                 ? "bg-warning/10 text-warning border-warning/30"
                 : "bg-muted text-muted-foreground border-border")}>
-            {showWithdrawalPhase ? "✓ 4% withdrawal after $1M" : "Accumulation only"}
+            {showWithdrawalPhase ? `✓ 4% withdrawal${retireFromMonth ? "" : " after $1M"}` : "Accumulation only"}
           </button>
         </div>
       )}
@@ -1482,6 +1576,26 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
                 </p>
               </div>
 
+              {/* Stats bar — moved above chart for readability */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground justify-center mt-2 mb-1">
+                <span>• {formatCurrency(totalMonthly)}/mo total</span>
+                {includedHoldings.map(h => {
+                  const manual = savedConfigs[h.holding.id]?.monthlyContribution || 0;
+                  const auto = autoContributions[h.holding.id] ?? 0;
+                  return (
+                    <span key={h.holding.id} className="whitespace-nowrap">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full align-middle mr-0.5" style={{ backgroundColor: h.holding.color }} />
+                      {h.holding.name} {formatCurrency(manual)}/mo
+                      {auto > 0 && <span className="text-success"> +{formatCurrency(auto)}/mo auto</span>}
+                    </span>
+                  );
+                })}
+                <span>• {weightedReturn.toFixed(1)}% p.a.</span>
+                <span>• {includedConfigs.length} holding{includedConfigs.length !== 1 ? "s" : ""}</span>
+                {adjustForInflation && <span>• adj. 3% inflation</span>}
+                {showWithdrawalPhase && <span className="text-warning">• 4% withdrawal{retireFromMonth ? "" : " after target"}{projection.retireIncome ? ` → ${projection.retireIncome}/mo` : ""}</span>}
+              </div>
+
               {/* Monte Carlo fan chart */}
               {projection.monteCarlo && projection.monteCarlo.length > 1 && (
                 <MonteCarloChart
@@ -1548,28 +1662,159 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
               )}
             </>
           )}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground justify-center">
-            <span>• {formatCurrency(totalMonthly)}/mo total</span>
-            {includedHoldings.map(h => {
-              const manual = savedConfigs[h.holding.id]?.monthlyContribution || 0;
-              const auto = autoContributions[h.holding.id] ?? 0;
-              return (
-                <span key={h.holding.id} className="whitespace-nowrap">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full align-middle mr-0.5" style={{ backgroundColor: h.holding.color }} />
-                  {h.holding.name} {formatCurrency(manual)}/mo
-                  {auto > 0 && <span className="text-success"> +{formatCurrency(auto)}/mo auto</span>}
-                </span>
-              );
-            })}
-            <span>• {weightedReturn.toFixed(1)}% p.a.</span>
-            <span>• {includedConfigs.length} holding{includedConfigs.length !== 1 ? "s" : ""}</span>
-            {adjustForInflation && <span>• adj. 3% inflation</span>}
-            {showWithdrawalPhase && <span className="text-warning">• 4% withdrawal after target</span>}
-          </div>
         </>
       )}
       {includedConfigs.length === 0 && (
         <p className="text-xs text-muted-foreground text-center py-1">Toggle holdings above to include them in the projection.</p>
+      )}
+
+      {/* Quick Scenario — standalone card */}
+      {projection && includedConfigs.length > 0 && (
+        <div className="border-t border-border pt-3 space-y-3">
+          <div className="flex items-center gap-2">
+            <BarChart3 size={13} className="text-primary" />
+            <span className="text-xs font-semibold text-foreground">Quick Scenario</span>
+          </div>
+          <div className="flex flex-wrap items-end gap-2 bg-muted/30 rounded-lg p-2.5">
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] text-muted-foreground font-medium">Growth rate</span>
+              <div className="flex items-center gap-1">
+                <input type="number" value={qsReturn}
+                  onChange={e => { setQsReturn(e.target.value); setQsResult(null); }}
+                  className="w-14 text-xs rounded border border-border bg-background px-1 py-1 text-right" placeholder={`${weightedReturn.toFixed(1)}`} />
+                <span className="text-[10px] text-muted-foreground">%</span>
+              </div>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] text-muted-foreground font-medium">One-off</span>
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-muted-foreground">$</span>
+                <input type="number" value={qsOneOffAmount}
+                  onChange={e => { setQsOneOffAmount(e.target.value); setQsResult(null); }}
+                  className="w-16 text-xs rounded border border-border bg-background px-1 py-1 text-right" placeholder="0" />
+              </div>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[9px] text-muted-foreground font-medium">Timing</span>
+              <div className="flex items-center gap-1">
+                <button onClick={() => { setQsOneOffNow(!qsOneOffNow); setQsResult(null); }}
+                  className={cn("text-[9px] px-1.5 py-1 rounded font-medium border transition-colors",
+                    qsOneOffNow ? "bg-primary/10 text-primary border-primary/30" : "bg-muted text-muted-foreground border-border")}>
+                  Now
+                </button>
+                {!qsOneOffNow && (
+                  <>
+                    <input type="number" value={qsOneOffYear} min={1} max={30}
+                      onChange={e => { setQsOneOffYear(e.target.value); setQsResult(null); }}
+                      className="w-10 text-xs rounded border border-border bg-background px-1 py-1 text-center" placeholder="2" />
+                    <span className="text-[9px] text-muted-foreground">yr</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <button onClick={() => {
+              const ret = parseFloat(qsReturn);
+              const ooAmt = parseFloat(qsOneOffAmount) || 0;
+              const ooMonth = qsOneOffNow ? 0 : (parseInt(qsOneOffYear) || 2) * 12;
+              const customReturn = isNaN(ret) ? null : ret;
+              // Build scenario configs with custom return applied uniformly
+              let scConfigs = includedConfigs.map(c => ({
+                ...c,
+                annualReturn: customReturn ?? c.annualReturn,
+              }));
+              // If one-off is "Now", add to starting market values
+              if (ooAmt > 0 && qsOneOffNow) {
+                const totalMv = scConfigs.reduce((s, h) => s + h.marketValue, 0);
+                if (totalMv > 0) {
+                  scConfigs = scConfigs.map(c => ({
+                    ...c,
+                    marketValue: c.marketValue + ooAmt * (c.marketValue / totalMv),
+                  }));
+                }
+              }
+              const baseMonths = projection.totalMonths;
+              const scMonths = monthsToTarget(scConfigs, 1_000_000, ooAmt > 0 && !qsOneOffNow && ooMonth > 0 ? { month: ooMonth, amount: ooAmt } : undefined);
+              // Milestone values (simple compound, no Monte Carlo)
+              const qsMilestones = [5, 10, 15, 20].map(year => {
+                const m = year * 12;
+                let baseVal = 0, scVal = 0;
+                for (let i = 0; i < includedConfigs.length; i++) {
+                  const r = includedConfigs[i].annualReturn / 100 / 12;
+                  const PV = includedConfigs[i].marketValue;
+                  const PMT = includedConfigs[i].monthlyContribution;
+                  baseVal += r > 0 ? PV * Math.pow(1 + r, m) + PMT * (Math.pow(1 + r, m) - 1) / r : PV + PMT * m;
+                  const sr = customReturn ?? includedConfigs[i].annualReturn;
+                  const srMonth = sr / 100 / 12;
+                  // Scenario start value includes "Now" one-off if set
+                  const scPV = qsOneOffNow && ooAmt > 0
+                    ? PV + ooAmt * (PV / includedConfigs.reduce((a, c) => a + c.marketValue, 0))
+                    : PV;
+                  if (!qsOneOffNow && ooAmt > 0 && ooMonth > 0 && ooMonth <= m) {
+                    // Phase 1
+                    let v = srMonth > 0 ? scPV * Math.pow(1 + srMonth, ooMonth) + PMT * (Math.pow(1 + srMonth, ooMonth) - 1) / srMonth : scPV + PMT * ooMonth;
+                    v += ooAmt * (scPV / scConfigs.reduce((a, c) => a + c.marketValue, 0));
+                    const n2 = m - ooMonth;
+                    scVal += srMonth > 0 ? v * Math.pow(1 + srMonth, n2) + PMT * (Math.pow(1 + srMonth, n2) - 1) / srMonth : v + PMT * n2;
+                  } else {
+                    scVal += srMonth > 0 ? scPV * Math.pow(1 + srMonth, m) + PMT * (Math.pow(1 + srMonth, m) - 1) / srMonth : scPV + PMT * m;
+                  }
+                }
+                return { year, base: baseVal, sc: scVal };
+              });
+              setQsResult({ scMonths, baseMonths, milestones: qsMilestones });
+            }} className="px-3 py-1 rounded-lg text-xs font-semibold bg-primary text-primary-foreground hover:bg-primary/90 transition-colors">
+              Project
+            </button>
+          </div>
+          {qsResult && (
+            <div className="space-y-2">
+              {isFinite(qsResult.scMonths) ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="text-center p-2 rounded-lg bg-card border border-border">
+                    <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Baseline</p>
+                    <p className="text-sm font-bold text-foreground">
+                      {qsResult.baseMonths > 0 ? `${Math.floor(qsResult.baseMonths / 12)}y ${qsResult.baseMonths % 12}mo` : "< 1mo"}
+                    </p>
+                  </div>
+                  <div className="text-center p-2 rounded-lg bg-card border border-primary/30">
+                    <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Scenario</p>
+                    <p className="text-sm font-bold" style={{ color: qsResult.scMonths < qsResult.baseMonths ? "var(--success)" : "var(--danger)" }}>
+                      {qsResult.scMonths > 0 ? `${Math.floor(qsResult.scMonths / 12)}y ${qsResult.scMonths % 12}mo` : "< 1mo"}
+                    </p>
+                  </div>
+                  {qsResult.scMonths !== qsResult.baseMonths && (
+                    <div className="col-span-2 text-center">
+                      <span className={cn("text-[11px] font-semibold", qsResult.scMonths < qsResult.baseMonths ? "text-success" : "text-destructive")}>
+                        {qsResult.scMonths < qsResult.baseMonths ? "Saves " : "Adds "}{Math.abs(Math.floor((qsResult.baseMonths - qsResult.scMonths) / 12))}y {Math.abs((qsResult.baseMonths - qsResult.scMonths) % 12)}mo
+                      </span>
+                      {parseFloat(qsReturn) > 0 && <span className="text-[10px] text-muted-foreground ml-2">@ {qsReturn}%</span>}
+                      {parseFloat(qsOneOffAmount) > 0 && (
+                        <span className="text-[10px] text-muted-foreground ml-2">
+                          +{formatCurrency(parseFloat(qsOneOffAmount))} {qsOneOffNow ? "now" : `in ${qsOneOffYear}yr`}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground text-center">Scenario never reaches target.</p>
+              )}
+              {qsResult.milestones.some(m => m.sc > 0) && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                  {qsResult.milestones.filter(m => m.sc > 0).map(m => (
+                    <div key={m.year} className="bg-muted/40 rounded px-2 py-1.5 text-center">
+                      <p className="text-[9px] text-muted-foreground font-medium">{m.year}yr</p>
+                      <p className="text-[11px] font-semibold text-foreground">{formatCurrency(m.sc)}</p>
+                      <p className={cn("text-[9px]", m.sc > m.base ? "text-success" : m.sc < m.base ? "text-destructive" : "text-muted-foreground")}>
+                        {m.sc > m.base ? `+${formatCurrency(m.sc - m.base)}` : m.sc < m.base ? formatCurrency(m.sc - m.base) : "—"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {/* What If comparison */}
@@ -1586,12 +1831,43 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
           </div>
           {showWhatIf && (
             <div className="space-y-3 border border-border rounded-lg p-3 bg-muted/20">
-              <p className="text-[10px] text-muted-foreground font-medium">Scenario — override per-holding contributions &amp; returns to compare</p>
+              <p className="text-[10px] text-muted-foreground font-medium">Scenario — override contributions, returns &amp; one-off investments to compare</p>
+
+              {/* Uniform growth toggle */}
+              <div className="flex items-center gap-2">
+                <button onClick={() => setWiUniformGrowth(v => !v)}
+                  className={cn("text-[9px] px-2 py-1 rounded font-medium border transition-colors",
+                    wiUniformGrowth ? "bg-primary/10 text-primary border-primary/30" : "bg-muted text-muted-foreground border-border")}>
+                  {wiUniformGrowth ? "✓ Uniform growth" : "Uniform growth"}
+                </button>
+                {wiUniformGrowth && (
+                  <div className="flex items-center gap-1">
+                    <input type="number" value={wiUniformReturn}
+                      onChange={e => setWiUniformReturn(e.target.value)}
+                      className="w-12 text-xs rounded border border-primary/30 bg-background px-1 py-0.5 text-right" placeholder="10" />
+                    <span className="text-[9px] text-muted-foreground">%</span>
+                  </div>
+                )}
+                {/* One-off investment */}
+                <div className="flex items-center gap-1 ml-auto">
+                  <span className="text-[9px] text-muted-foreground">+$</span>
+                  <input type="number" value={wiOneOffAmount}
+                    onChange={e => setWiOneOffAmount(e.target.value)}
+                    className="w-14 text-xs rounded border border-primary/30 bg-background px-1 py-0.5 text-right" placeholder="0" />
+                  <span className="text-[9px] text-muted-foreground">in</span>
+                  <input type="number" value={wiOneOffYear} min={1} max={30}
+                    onChange={e => setWiOneOffYear(e.target.value)}
+                    className="w-10 text-xs rounded border border-primary/30 bg-background px-1 py-0.5 text-center" placeholder="2" />
+                  <span className="text-[9px] text-muted-foreground">yr</span>
+                </div>
+              </div>
+
               <div className="space-y-2">
                 {summaries.filter(s => !excluded.has(s.holding.id)).map(s => {
                   const cfg = savedConfigs[s.holding.id];
                   if (!cfg) return null;
                   const sc = scenarioConfigs[s.holding.id] ?? { monthlyContribution: cfg.monthlyContribution, annualReturn: cfg.annualReturn };
+                  // Don't show per-holding return inputs when uniform growth is on
                   return (
                     <div key={s.holding.id} className="flex items-center gap-2">
                       <HoldingIcon holding={s.holding} size={12} />
@@ -1606,9 +1882,11 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
                       <div className="flex items-center gap-1">
                         <input type="number" value={sc.annualReturn || ""}
                           onChange={e => updateScenarioConfig(s.holding.id, { annualReturn: parseFloat(e.target.value) || 0 })}
-                          className="w-12 text-xs rounded border border-primary/30 bg-background px-1 py-0.5 text-right"
-                          placeholder="7" />
-                        <span className="text-[9px] text-muted-foreground">%</span>
+                          className={cn("w-12 text-xs rounded border bg-background px-1 py-0.5 text-right",
+                            wiUniformGrowth ? "border-muted text-muted-foreground opacity-50" : "border-primary/30")}
+                          placeholder="7"
+                          disabled={wiUniformGrowth} />
+                        <span className={cn("text-[9px]", wiUniformGrowth ? "text-muted-foreground/40" : "text-muted-foreground")}>%</span>
                       </div>
                     </div>
                   );
@@ -1618,18 +1896,21 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
                 const scConfigs = includedConfigs.map(c => {
                   const sc = scenarioConfigs[c.holdingId];
                   const auto = autoContributions[c.holdingId] ?? 0;
+                  const uniformRet = wiUniformGrowth ? parseFloat(wiUniformReturn) : null;
                   return {
                     ...c,
                     monthlyContribution: (sc?.monthlyContribution ?? c.monthlyContribution - auto) + auto,
-                    annualReturn: sc?.annualReturn ?? c.annualReturn,
+                    annualReturn: uniformRet ?? sc?.annualReturn ?? c.annualReturn,
                   };
                 });
                 const scMonthly = scConfigs.reduce((s, h) => s + h.monthlyContribution, 0);
                 const scWeightedReturn = scConfigs.length > 0
                   ? scConfigs.reduce((s, h) => s + h.marketValue * h.annualReturn, 0) / scConfigs.reduce((s, h) => s + h.marketValue, 0)
                   : 0;
-                const scMonths = monthsToTarget(scConfigs, 1_000_000);
-                const baseMonths = projection.months;
+                const ooAmt = parseFloat(wiOneOffAmount) || 0;
+                const ooMonth = ooAmt > 0 ? (parseInt(wiOneOffYear) || 2) * 12 : 0;
+                const scMonths = monthsToTarget(scConfigs, 1_000_000, ooAmt > 0 && ooMonth > 0 ? { month: ooMonth, amount: ooAmt } : undefined);
+                const baseMonths = projection.totalMonths;
                 const diffMonths = baseMonths - scMonths;
                 if (!isFinite(scMonths)) return <p className="text-xs text-muted-foreground">Scenario never reaches target.</p>;
                 return (
@@ -1654,10 +1935,15 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
                           <span className={cn("text-[11px] font-semibold", diffMonths > 0 ? "text-success" : "text-destructive")}>
                             {diffMonths > 0 ? "Saves " : "Adds "}{Math.abs(Math.floor(diffMonths / 12))}y {Math.abs(diffMonths % 12)}mo
                           </span>
+                          {ooAmt > 0 && (
+                            <span className="text-[10px] text-muted-foreground ml-2">
+                              +{formatCurrency(ooAmt)} in {wiOneOffYear}yr
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>
-                    {/* Scenario chart */}
+                    {/* Scenario chart — pass one-off investments to Monte Carlo */}
                     <ScenarioChart
                       configs={scConfigs}
                       adjustForInflation={adjustForInflation}
@@ -1665,6 +1951,7 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
                       yearRange={yearRange}
                       maxProjYears={maxProjYears}
                       visibleHoldingNames={visibleHoldingNames}
+                      oneOffInvestments={ooAmt > 0 && ooMonth > 0 ? [{ month: ooMonth, amount: ooAmt }] : undefined}
                     />
                   </div>
                 );
@@ -1706,6 +1993,11 @@ export function InvestmentsPage() {
 
   const lastRef = useStore(s => s.lastRefreshedAt);
   const lastRefreshedAgo = lastRef ? Math.round((Date.now() - lastRef) / 60000) : null;
+
+  const [viewMode, setViewMode] = useState<"cards" | "compact" | "list">(
+    () => (localStorage.getItem("investmentsView") as "cards" | "compact" | "list") ?? "cards",
+  );
+  const setView = (mode: "cards" | "compact" | "list") => { setViewMode(mode); localStorage.setItem("investmentsView", mode); };
 
   if (detailHoldingId != null) {
     return (
@@ -1789,52 +2081,111 @@ export function InvestmentsPage() {
 
             {/* Holdings list */}
             <div>
-              <SectionHeader
-                title="Holdings"
-                action={{ label: "Refresh Prices", onPress: onRefreshPrices }}
-              />
-              <div className="space-y-2">
-                {portfolio.holdingSummaries.map(s => {
-                  const hasValue = s.marketValue > 0;
-                  const gainPct = s.totalCostBasis > 0 ? s.unrealizedGainLossPct : null;
-                  return (
-                    <Card key={s.holding.id} onClick={() => setDetailHoldingId(s.holding.id)} padding={false} className="px-4 py-3 cursor-pointer hover:border-primary/40 transition-colors">
-                      <div className="flex items-center gap-3">
-                        <HoldingIcon holding={s.holding} size={18} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <p className="text-sm font-semibold text-foreground">{s.holding.name}</p>
-                            {s.holding.owner === "self" ? (
-                              <User size={12} className="text-primary" />
-                            ) : s.holding.owner === "partner" ? (
-                              <Users size={12} className="text-warning" />
-                            ) : null}
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
-                              {HOLDING_TYPE_LABELS[s.holding.type]}
-                            </span>
-                            {s.holding.symbol && <span className="text-[10px] text-muted-foreground">{s.holding.symbol}</span>}
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            {s.totalUnits > 0
-                              ? `${s.totalUnits.toFixed(4)} units · Avg ${formatCurrency(s.avgCostPerUnit)}`
-                              : "Lump sum"}
-                            {s.holding.currentUnitPrice != null && <> · {s.totalUnits > 0 ? "Price" : "Value"} {formatCurrency(s.holding.currentUnitPrice)}</>}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm font-bold text-foreground">{hasValue ? formatCurrency(s.marketValue) : "—"}</p>
-                          {gainPct != null && (
-                            <p className={cn("text-xs font-medium", s.unrealizedGainLoss >= 0 ? "text-success" : "text-destructive")}>
-                              {s.unrealizedGainLoss >= 0 ? "+" : ""}{gainPct.toFixed(1)}%
-                            </p>
-                          )}
-                        </div>
-                        <ChevronRight size={14} className="text-muted-foreground flex-shrink-0" />
-                      </div>
-                    </Card>
-                  );
-                })}
+              <div className="flex items-center justify-between mb-2">
+                <SectionHeader title="Holdings" />
+                <div className="flex items-center gap-2">
+                  <button onClick={onRefreshPrices} disabled={refreshing} className="text-[10px] text-primary hover:underline flex items-center gap-1">
+                    <RefreshCw size={11} className={refreshing ? "animate-spin" : ""} />
+                    {refreshing ? "Refreshing..." : "Refresh Prices"}
+                  </button>
+                  <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
+                    <button onClick={() => setView("cards")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "cards" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Card view"><LayoutGrid size={14} /></button>
+                    <button onClick={() => setView("compact")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "compact" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Compact grid"><LayoutGrid size={12} className="scale-75" /></button>
+                    <button onClick={() => setView("list")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "list" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="List view"><List size={14} /></button>
+                  </div>
+                </div>
               </div>
+              {viewMode === "cards" && (
+                <div className="space-y-2">
+                  {portfolio.holdingSummaries.map(s => {
+                    const hasValue = s.marketValue > 0;
+                    const gainPct = s.totalCostBasis > 0 ? s.unrealizedGainLossPct : null;
+                    return (
+                      <Card key={s.holding.id} onClick={() => setDetailHoldingId(s.holding.id)} padding={false} className="px-4 py-3 cursor-pointer hover:border-primary/40 transition-colors">
+                        <div className="flex items-center gap-3">
+                          <HoldingIcon holding={s.holding} size={18} />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-semibold text-foreground">{s.holding.name}</p>
+                              {s.holding.owner === "self" ? (
+                                <User size={12} className="text-primary" />
+                              ) : s.holding.owner === "partner" ? (
+                                <Users size={12} className="text-warning" />
+                              ) : null}
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+                                {HOLDING_TYPE_LABELS[s.holding.type]}
+                              </span>
+                              {s.holding.symbol && <span className="text-[10px] text-muted-foreground">{s.holding.symbol}</span>}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              {s.totalUnits > 0
+                                ? `${s.totalUnits.toFixed(4)} units · Invested ${formatCurrency(s.totalInvested)}`
+                                : `Invested ${formatCurrency(s.totalInvested)}`}
+                              {s.totalUnits > 0 && s.holding.currentUnitPrice != null && <> · @ {formatCurrency(s.holding.currentUnitPrice)}</>}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-bold text-foreground">{hasValue ? formatCurrency(s.marketValue) : "—"}</p>
+                            {gainPct != null && (
+                              <p className={cn("text-xs font-medium", s.unrealizedGainLoss >= 0 ? "text-success" : "text-destructive")}>
+                                {s.unrealizedGainLoss >= 0 ? "+" : ""}{gainPct.toFixed(1)}%
+                              </p>
+                            )}
+                          </div>
+                          <ChevronRight size={14} className="text-muted-foreground flex-shrink-0" />
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+              {viewMode === "compact" && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {portfolio.holdingSummaries.map(s => {
+                    const hasValue = s.marketValue > 0;
+                    const gainPct = s.totalCostBasis > 0 ? s.unrealizedGainLossPct : null;
+                    return (
+                      <div key={s.holding.id} onClick={() => setDetailHoldingId(s.holding.id)} className="bg-card border border-border rounded-lg px-3 py-2 cursor-pointer hover:border-primary/40 transition-colors">
+                        <div className="flex items-center gap-2 mb-1">
+                          <HoldingIcon holding={s.holding} size={14} />
+                          <p className="text-xs font-semibold text-foreground truncate flex-1">{s.holding.name}</p>
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-muted text-muted-foreground">{HOLDING_TYPE_LABELS[s.holding.type]}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">{s.holding.symbol ?? ""}</span>
+                          <div className="text-right">
+                            <p className="text-xs font-bold text-foreground">{hasValue ? formatCurrency(s.marketValue) : "—"}</p>
+                            {gainPct != null && (
+                              <p className={cn("text-[10px] font-medium", s.unrealizedGainLoss >= 0 ? "text-success" : "text-destructive")}>
+                                {s.unrealizedGainLoss >= 0 ? "+" : ""}{gainPct.toFixed(1)}%
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {viewMode === "list" && (
+                <Card padding={false}>
+                  {portfolio.holdingSummaries.map((s, i) => {
+                    const hasValue = s.marketValue > 0;
+                    const gainPct = s.totalCostBasis > 0 ? s.unrealizedGainLossPct : null;
+                    return (
+                      <div key={s.holding.id} onClick={() => setDetailHoldingId(s.holding.id)}
+                        className={cn("flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors", i < portfolio.holdingSummaries.length - 1 && "border-b border-border")}>
+                        <HoldingIcon holding={s.holding} size={12} />
+                        <p className="text-xs font-medium text-foreground flex-1 min-w-0 truncate">{s.holding.name}</p>
+                        <span className="text-[9px] text-muted-foreground flex-shrink-0">{HOLDING_TYPE_LABELS[s.holding.type]}</span>
+                        <span className={cn("text-xs font-semibold w-16 text-right", s.unrealizedGainLoss >= 0 ? "text-success" : s.unrealizedGainLoss < 0 ? "text-destructive" : "text-foreground")}>
+                          {hasValue ? formatCurrency(s.marketValue) : "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </Card>
+              )}
             </div>
 
             {/* Realised P&L Summary */}
