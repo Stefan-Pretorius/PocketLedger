@@ -16,9 +16,9 @@ function ExpenseModal({
   visible, onClose, budgetId, initial,
 }: {
   visible: boolean; onClose: () => void; budgetId: number;
-  initial?: { id: number; description: string; amount: number; date: string; categoryId?: number | null; goalId?: number | null; isWithdrawal?: boolean; fundedByGoalId?: number | null; accountId?: number; merchant?: string; notes?: string };
+  initial?: { id: number; description: string; amount: number; date: string; categoryId?: number | null; goalId?: number | null; isWithdrawal?: boolean; fundedByGoalId?: number | null; accountId?: number; merchant?: string; notes?: string; importedFromBank?: boolean };
 }) {
-  const { createExpense, updateExpense, updateGoal, categories, accounts, goals } = useStore();
+  const { createExpense, updateExpense, updateGoal, categories, accounts, goals, upsertBankRule } = useStore();
   const budgetCats = categories.filter(c => c.budgetId === budgetId);
   const [desc, setDesc] = useState(initial?.description ?? "");
   const [amount, setAmount] = useState(String(initial?.amount ?? ""));
@@ -126,6 +126,14 @@ function ExpenseModal({
         fundedByGoalId: isGoalMode ? undefined : (fundedByGoalId ?? undefined),
         accountId: accountId ?? undefined, merchant, notes,
       });
+      // Auto-create bank rule when categorizing a previously-uncategorized expense
+      if (!isGoalMode && categoryId != null && initial.categoryId == null && (initial.importedFromBank || desc.trim().length >= 3)) {
+        const kw = merchant?.trim() || desc.split(" ").slice(0, 3).join(" ");
+        const cat = budgetCats.find(c => c.id === categoryId);
+        if (cat && kw.length >= 3) {
+          upsertBankRule({ keyword: kw, routeTo: "category", categoryName: cat.name });
+        }
+      }
       toast.success("Expense updated");
     } else if (isGoalMode) {
       const goal = goals.find(g => g.id === goalId);

@@ -583,7 +583,17 @@ export const useStore = create<AppState>()((set, get) => ({
     for (const rec of recurring) {
       if (!rec.isActive) continue;
 
-      const dates = getRecurringDatesInMonth(budget.year, budget.month, rec);
+      const { startDate, endDate } = getBudgetDateRange(budget);
+      let dates = getRecurringDatesInMonth(budget.year, budget.month, rec)
+        .filter(d => d >= startDate && d < endDate);
+      const budgetStartDay = budget.startDay ?? 1;
+      if (budgetStartDay > 1) {
+        const nextMonth = budget.month === 12 ? 1 : budget.month + 1;
+        const nextYear = budget.month === 12 ? budget.year + 1 : budget.year;
+        const nextDates = getRecurringDatesInMonth(nextYear, nextMonth, rec)
+          .filter(d => d >= startDate && d < endDate);
+        dates = [...dates, ...nextDates].sort();
+      }
 
       if (rec.goalId != null) {
         // Goal-linked recurring: create contribution expenses

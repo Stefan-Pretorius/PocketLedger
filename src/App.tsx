@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { useStore } from "./store";
 import { Layout } from "./components/Layout";
 import { Dashboard } from "./pages/Dashboard";
+import { MoneyFlowPage } from "./pages/MoneyFlow";
 import { BudgetPage } from "./pages/Budget";
 import { ExpensesPage } from "./pages/Expenses";
 import { GoalsPage } from "./pages/Goals";
@@ -42,6 +43,7 @@ function App() {
           <Route path="/goals" component={GoalsPage} />
           <Route path="/investments" component={InvestmentsPage} />
           <Route path="/scenarios" component={ScenariosPage} />
+          <Route path="/money-flow" component={MoneyFlowPage} />
           <Route path="/trends" component={TrendsPage} />
           <Route path="/statements" component={StatementsPage} />
           <Route path="/settings" component={SettingsPage} />

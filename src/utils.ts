@@ -25,7 +25,8 @@ export function currentMonth(): { month: number; year: number } {
   return { month: d.getMonth() + 1, year: d.getFullYear() };
 }
 
-import type { Budget, PayFrequency, RecurringExpense } from "./types";
+import { Colors } from "./theme";
+import type { Budget, PayFrequency, RecurringExpense, BudgetSummary, Expense, Goal, Account } from "./types";
 
 /** Compute the date range a budget covers, based on its startDay. */
 export function getBudgetDateRange(budget: Pick<Budget, "month" | "year" | "startDay">): { startDate: string; endDate: string } {
@@ -133,4 +134,129 @@ export function formatRecurringSchedule(rec: Pick<RecurringExpense, "frequency" 
         ? `fortnightly · from ${formatDate(rec.anchorDate)}`
         : `fortnightly · ${dayOfWeekLabel(rec.dayOfWeek ?? 1)}`;
   }
+}
+
+// ─── Sankey data ──────────────────────────────────────────────────────────────
+
+export interface SankeyNode {
+  id: string;
+  label: string;
+  color: string;
+  column: number;
+}
+
+export interface SankeyLink {
+  source: string;
+  target: string;
+  value: number;
+  color: string;
+}
+
+export interface SankeyData {
+  nodes: SankeyNode[];
+  links: SankeyLink[];
+}
+
+import type { BudgetSummary, Expense, Goal, Account } from "./types";
+
+/**
+ * Build nodes & links for a 3-column Sankey: Income Sources → Accounts → Categories + Goals.
+ * Column 0: income sources  |  Column 1: accounts  |  Column 2: categories + goals
+ */
+export function computeSankeyData(
+  summary: BudgetSummary,
+  expenses: Expense[],
+  allGoals: Goal[],
+  allAccounts: Account[],
+): SankeyData {
+  const { startDate, endDate } = getBudgetDateRange(summary.budget);
+  const periodExpenses = expenses.filter(
+    e => e.budgetId === summary.budget.id && e.date >= startDate && e.date <= endDate,
+  );
+
+  const accounts = new Map(allAccounts.map(a => [a.id, a]));
+
+  // Aggregate by category (non-goal) and by goal (contributions only)
+  const catSpend = new Map<number, number>();
+  const goalSpend = new Map<number, number>();
+  for (const exp of periodExpenses) {
+    if (exp.isWithdrawal) continue;
+    if (exp.goalId != null) {
+      goalSpend.set(exp.goalId, (goalSpend.get(exp.goalId) ?? 0) + exp.amount);
+    } else if (exp.categoryId != null && !summary.categories.find(c => c.id === exp.categoryId)?.isRounding) {
+      catSpend.set(exp.categoryId, (catSpend.get(exp.categoryId) ?? 0) + exp.amount);
+    }
+  }
+
+  const nodes: SankeyNode[] = [];
+  const nodeIndex = new Map<string, number>();
+  const links: SankeyLink[] = [];
+  const addNode = (id: string, label: string, color: string, col: number) => {
+    if (nodeIndex.has(id)) return;
+    nodeIndex.set(id, nodes.length);
+    nodes.push({ id, label, color, column: col });
+  };
+
+  // Income sources → Accounts
+  for (const inc of summary.incomeSources) {
+    const incId = `inc-${inc.id}`;
+    addNode(incId, inc.name, Colors.success, 0);
+    if (inc.accountId != null) {
+      const a = accounts.get(inc.accountId);
+      if (a) {
+        const accId = `acc-${inc.accountId}`;
+        addNode(accId, a.name, Colors.primary, 1);
+        links.push({ source: incId, target: accId, value: monthlyIncomeAmount(inc.amount, inc.frequency), color: Colors.success });
+      }
+    }
+  }
+
+  // Helper: create links from accounts to a target node with account breakdown
+  const linkAccountsTo = (targetId: string, color: string, filter: (exp: Expense) => boolean) => {
+    const byAccount = new Map<number, number>();
+    for (const exp of periodExpenses) {
+      if (filter(exp) && exp.accountId != null) {
+        byAccount.set(exp.accountId, (byAccount.get(exp.accountId) ?? 0) + exp.amount);
+      }
+    }
+    for (const [accId, val] of byAccount) {
+      const a = accounts.get(accId);
+      if (a) {
+        const accIdStr = `acc-${accId}`;
+        addNode(accIdStr, a.name, Colors.primary, 1);
+        links.push({ source: accIdStr, target: targetId, value: val, color });
+      }
+    }
+    const totalFromAccounts = [...byAccount.values()].reduce((s, v) => s + v, 0);
+    const totalFromLinks = links.filter(l => l.target === targetId).reduce((s, l) => s + l.value, 0);
+    const remainder = totalFromLinks - totalFromAccounts;
+    if (remainder > 0) {
+      addNode("acc-unknown", "Unknown", "#94a3b8", 1);
+      links.push({ source: "acc-unknown", target: targetId, value: remainder, color });
+    }
+  };
+
+  // Accounts → Categories
+  for (const [catId, total] of catSpend) {
+    const cat = summary.categories.find(c => c.id === catId);
+    if (!cat) continue;
+    const catIdStr = `cat-${catId}`;
+    addNode(catIdStr, cat.name, cat.color, 2);
+    linkAccountsTo(catIdStr, cat.color, exp =>
+      exp.categoryId === catId && !exp.isWithdrawal && exp.goalId == null,
+    );
+  }
+
+  // Accounts → Goals
+  for (const [goalId, total] of goalSpend) {
+    const goal = allGoals.find(g => g.id === goalId);
+    if (!goal) continue;
+    const goalIdStr = `goal-${goalId}`;
+    addNode(goalIdStr, goal.name, goal.color, 2);
+    linkAccountsTo(goalIdStr, goal.color, exp =>
+      exp.goalId === goalId && !exp.isWithdrawal,
+    );
+  }
+
+  return { nodes, links };
 }

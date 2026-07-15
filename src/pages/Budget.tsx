@@ -733,13 +733,15 @@ function ApplyResultModal({
 
 // ─── Category Card ─────────────────────────────────────────────────────────────
 
-function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExpandedCategory, expenses, summary, updateExpense, movingExpense, setMovingExpense, movingRefs, handleConvertToRecurring, setEditCat, setConfirmDelete }: {
+function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExpandedCategory, expenses, summary, updateExpense, deleteExpense, movingExpense, setMovingExpense, movingRefs, handleConvertToRecurring, setEditCat, setConfirmDelete, accounts, accountLookup }: {
   cat: any; recurring: boolean; activeBudgetId: number | null; expandedCategory: number | null; setExpandedCategory: (v: number | null) => void;
-  expenses: any[]; summary: any; updateExpense: (id: number, e: any) => void;
+  expenses: any[]; summary: any; updateExpense: (id: number, e: any) => void; deleteExpense: (id: number) => void;
   movingExpense: number | null; setMovingExpense: (v: number | null) => void; movingRefs: React.MutableRefObject<Record<number, HTMLDivElement | null>>;
   handleConvertToRecurring: (cat: any) => void; setEditCat: (cat: any) => void; setConfirmDelete: (v: any) => void;
+  accounts: any[]; accountLookup: Map<number, any>;
 }) {
   const { goals } = useStore();
+  const [confirmDeleteExpense, setConfirmDeleteExpense] = useState<number | null>(null);
   const linkedGoal = cat.linkedGoalId ? goals.find((g: any) => g.id === cat.linkedGoalId) : null;
   const effectiveMonthly = cat.frequency === "weekly" ? (cat.allocatedAmount * 52 / 12) : cat.frequency === "fortnightly" ? (cat.allocatedAmount * 26 / 12) : cat.allocatedAmount;
   const pct = effectiveMonthly > 0 ? (cat.spent ?? 0) / effectiveMonthly : 0;
@@ -801,9 +803,16 @@ function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
                     {ex.date}{ex.merchant ? ` · ${ex.merchant}` : ""}
                   </p>
                 </div>
-                <div className="flex items-center gap-1 flex-shrink-0">
-                  <span className="text-xs font-semibold text-foreground">{formatCurrency(ex.amount)}</span>
-                  <button
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <span className="text-xs font-semibold text-foreground">{formatCurrency(ex.amount)}</span>
+                    <button
+                      onClick={() => setConfirmDeleteExpense(ex.id)}
+                      className="p-1 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                      title="Delete expense"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                    <button
                     onClick={() => setMovingExpense(movingExpense === ex.id ? null : ex.id)}
                     className="p-1 rounded-lg hover:bg-muted text-muted-foreground"
                     title="Move to another category"
@@ -836,17 +845,25 @@ function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
           )}
         </div>
       )}
+      <Confirm
+        visible={confirmDeleteExpense != null}
+        onClose={() => setConfirmDeleteExpense(null)}
+        onConfirm={() => { deleteExpense(confirmDeleteExpense!); setConfirmDeleteExpense(null); }}
+        title="Delete expense?"
+        message="This cannot be undone. The expense will be permanently removed."
+      />
     </Card>
   );
 }
 
 // ─── Rounding Card ─────────────────────────────────────────────────────────────
 
-function RoundingCard({ cat, recurring, activeBudgetId, expandedCategory, setExpandedCategory, expenses, summary, updateExpense, movingExpense, setMovingExpense, movingRefs, handleConvertToRecurring, setEditCat, setConfirmDelete }: {
+function RoundingCard({ cat, recurring, activeBudgetId, expandedCategory, setExpandedCategory, expenses, summary, updateExpense, movingExpense, setMovingExpense, movingRefs, handleConvertToRecurring, setEditCat, setConfirmDelete, accounts, accountLookup }: {
   cat: any; recurring: boolean; activeBudgetId: number | null; expandedCategory: number | null; setExpandedCategory: (v: number | null) => void;
   expenses: any[]; summary: any; updateExpense: (id: number, e: any) => void;
   movingExpense: number | null; setMovingExpense: (v: number | null) => void; movingRefs: React.MutableRefObject<Record<number, HTMLDivElement | null>>;
   handleConvertToRecurring: (cat: any) => void; setEditCat: (cat: any) => void; setConfirmDelete: (v: any) => void;
+  accounts: any[]; accountLookup: Map<number, any>;
 }) {
   const isExpanded = expandedCategory === cat.id;
   const catExpenses = expenses.filter(
@@ -883,7 +900,7 @@ function RoundingCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-foreground truncate">{ex.description}</p>
                   <p className="text-[11px] text-muted-foreground">
-                    {ex.date}{ex.merchant ? ` · ${ex.merchant}` : ""}
+                    {ex.date}{ex.merchant ? ` · ${ex.merchant}` : ""}{ex.accountId != null ? ` · ${accountLookup.get(ex.accountId)?.name ?? "Unknown"}` : ""}
                   </p>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
@@ -1240,9 +1257,9 @@ export function BudgetPage() {
   const {
     budgets, activeBudgetId, setActiveBudget, getBudgetSummary, getSuggestedCarryover,
     categories, expenses, recurring, accounts, goals, budgetSections,
-    deleteCategory, deleteBudget, deleteIncomeSource, deleteRecurring,
+    deleteCategory, deleteBudget, deleteIncomeSource, deleteRecurring, deleteExpense,
     updateRecurring, applyRecurring, copyBudget, updateBudget,
-    createCategory, createRecurring, updateExpense,
+    createCategory, createRecurring, updateExpense, upsertBankRule,
     createBudgetSection, updateCategory,
   } = useStore();
 
@@ -1268,22 +1285,31 @@ export function BudgetPage() {
   const [showPrint, setShowPrint] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<{ type: "budget" | "category" | "income" | "recurring"; id: number } | null>(null);
   const [filterCategoryId, setFilterCategoryId] = useState<number | "uncategorized" | null>(null);
+  const [filterAccountId, setFilterAccountId] = useState<number | null>(null);
+  const accountLookup = useMemo(() => new Map(accounts.map(a => [a.id, a])), [accounts]);
   const [viewMode, setViewMode] = useState<"cards" | "compact" | "list">(() => (localStorage.getItem("budgetView") as "cards" | "compact" | "list") ?? "cards");
   const setView = (mode: "cards" | "compact" | "list") => { setViewMode(mode); localStorage.setItem("budgetView", mode); };
 
+  const filterKey = `cat-${filterCategoryId ?? "all"}-acc-${filterAccountId ?? "all"}`;
   const safeBudgetSections = budgetSections ?? [];
   const summary = activeBudgetId ? getBudgetSummary(activeBudgetId) : null;
   const activeBudget = summary?.budget;
   const suggestedCarryover = activeBudgetId ? getSuggestedCarryover(activeBudgetId) : null;
   const budgetIncome = summary?.incomeSources ?? [];
   const budgetDateRange = summary?.budget ? getBudgetDateRange(summary.budget) : null;
-  const budgetExpenses = budgetDateRange ? expenses.filter(
-    e => e.budgetId === activeBudgetId && e.date >= budgetDateRange.startDate && e.date <= budgetDateRange.endDate && e.isWithdrawal !== true,
-  ).filter(e => {
-    if (filterCategoryId === "uncategorized") return e.categoryId == null;
-    if (filterCategoryId != null) return e.categoryId === filterCategoryId;
-    return true;
-  }) : [];
+  const budgetExpenses = useMemo(() => {
+    if (!budgetDateRange) return [];
+    return expenses.filter(
+      e => e.budgetId === activeBudgetId && e.date >= budgetDateRange.startDate && e.date <= budgetDateRange.endDate && e.isWithdrawal !== true,
+    ).filter(e => {
+      if (filterCategoryId === "uncategorized") return e.categoryId == null;
+      if (filterCategoryId != null) return e.categoryId === filterCategoryId;
+      return true;
+    }).filter(e => {
+      if (filterAccountId != null) return e.accountId === filterAccountId;
+      return true;
+    });
+  }, [expenses, activeBudgetId, budgetDateRange, filterCategoryId, filterAccountId]);
 
   const openAddIncome = (defaultName?: string) => {
     setEditIncome(null);
@@ -1653,6 +1679,35 @@ export function BudgetPage() {
               )}
             </div>
 
+            {/* Account Filter */}
+            {accounts.length > 0 && (
+              <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-thin pb-1 mb-3 -mx-1 px-1">
+                <button
+                  onClick={() => setFilterAccountId(null)}
+                  className={cn(
+                    "flex-shrink-0 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
+                    filterAccountId === null ? "bg-foreground text-background border-foreground" : "bg-card text-muted-foreground border-border hover:border-muted-foreground/30",
+                  )}
+                >
+                  All accounts
+                </button>
+                {accounts.map((acc: any) => (
+                  <button
+                    key={acc.id}
+                    onClick={() => setFilterAccountId(filterAccountId === acc.id ? null : acc.id)}
+                    className={cn(
+                      "flex-shrink-0 flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
+                      filterAccountId === acc.id ? "text-foreground border-foreground" : "text-muted-foreground border-border hover:border-muted-foreground/30",
+                    )}
+                    style={filterAccountId === acc.id ? { backgroundColor: Colors.primary + "20", borderColor: Colors.primary } : {}}
+                  >
+                    <Wallet size={11} />
+                    {acc.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Budget Categories */}
             <div>
               <SectionHeader title="Budget Categories" action={{ label: "+ Add", onPress: () => setShowNewCat(true) }} />
@@ -1681,40 +1736,47 @@ export function BudgetPage() {
                 }
                 const sectionKeys = Object.keys(bySection).sort((a, b) => a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b));
                 return (
-                  <div className="space-y-4">
+                  <div key={filterKey} className="space-y-4">
                     {sectionKeys.map(sec => {
                       const cats = bySection[sec];
                       const recCats = cats.filter(c => recurring.some(r => r.categoryName?.toLowerCase() === c.name.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name));
                       const oneoffCats = cats.filter(c => !recurring.some(r => r.categoryName?.toLowerCase() === c.name.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name));
+                      const hasActiveFilter = filterCategoryId !== null || filterAccountId !== null;
+                      const activeCatIds = new Set(budgetExpenses.map(e => e.categoryId));
+                      const visibleRec = hasActiveFilter ? recCats.filter(c => activeCatIds.has(c.id)) : recCats;
+                      const visibleOneoff = hasActiveFilter ? oneoffCats.filter(c => activeCatIds.has(c.id)) : oneoffCats;
+                      const visibleCats = hasActiveFilter ? cats.filter(c => activeCatIds.has(c.id)) : cats;
+                      if (hasActiveFilter && visibleRec.length === 0 && visibleOneoff.length === 0) return null;
                       return (
                         <div key={sec}>
                           <SectionHeader title={sec} />
                           {viewMode === "cards" && (
                             <div className="space-y-2">
-                              {recCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={true}
+                              {visibleRec.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={true}
                                 activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
-                                expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
+                                expenses={budgetExpenses} summary={summary} updateExpense={updateExpense} deleteExpense={deleteExpense}
                                 movingExpense={movingExpense} setMovingExpense={setMovingExpense}
                                 movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
-                                setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
-                              {recCats.length > 0 && oneoffCats.length > 0 && (
+                                setEditCat={setEditCat} setConfirmDelete={setConfirmDelete}
+                                accounts={accounts} accountLookup={accountLookup} />)}
+                              {visibleRec.length > 0 && visibleOneoff.length > 0 && (
                                 <div className="flex items-center gap-3 pt-1 pb-1">
-                                  <div className="h-px flex-1 bg-border" />
                                   <span className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider">One-off</span>
                                   <div className="h-px flex-1 bg-border" />
                                 </div>
                               )}
-                              {oneoffCats.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={false}
+                              {visibleOneoff.map(cat => <CategoryCard key={cat.id} cat={cat} recurring={false}
                                 activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
-                                expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
+                                expenses={budgetExpenses} summary={summary} updateExpense={updateExpense} deleteExpense={deleteExpense}
                                 movingExpense={movingExpense} setMovingExpense={setMovingExpense}
                                 movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
-                                setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
+                                setEditCat={setEditCat} setConfirmDelete={setConfirmDelete}
+                                accounts={accounts} accountLookup={accountLookup} />)}
                             </div>
                           )}
                           {viewMode === "compact" && (
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                              {cats.map(cat => {
+                              {visibleCats.map(cat => {
                                 const effectiveMonthly = cat.frequency === "weekly" ? (cat.allocatedAmount * 52 / 12) : cat.frequency === "fortnightly" ? (cat.allocatedAmount * 26 / 12) : cat.allocatedAmount;
                                 const pct = effectiveMonthly > 0 ? (cat.spent ?? 0) / effectiveMonthly : 0;
                                 return (
@@ -1738,7 +1800,7 @@ export function BudgetPage() {
                           )}
                           {viewMode === "list" && (
                             <Card padding={false}>
-                              {cats.map((cat, i) => {
+                              {visibleCats.map((cat, i) => {
                                 const effectiveMonthly = cat.frequency === "weekly" ? (cat.allocatedAmount * 52 / 12) : cat.frequency === "fortnightly" ? (cat.allocatedAmount * 26 / 12) : cat.allocatedAmount;
                                 const pct = effectiveMonthly > 0 ? (cat.spent ?? 0) / effectiveMonthly : 0;
                                 return (
@@ -1795,9 +1857,9 @@ export function BudgetPage() {
                           <div key={ex.id} className="flex items-center gap-2 py-1.5 px-1 rounded-lg hover:bg-muted/50 transition-colors">
                             <div className="flex-1 min-w-0">
                               <p className="text-xs font-medium text-foreground truncate">{ex.description}</p>
-                              <p className="text-[11px] text-muted-foreground">
-                                {ex.date}{ex.merchant ? ` · ${ex.merchant}` : ""}
-                              </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {ex.date}{ex.merchant ? ` · ${ex.merchant}` : ""}{ex.accountId != null ? ` · ${accountLookup.get(ex.accountId)?.name ?? "Unknown"}` : ""}
+                  </p>
                             </div>
                             <div className="flex items-center gap-1 flex-shrink-0">
                               <span className="text-xs font-semibold text-warning">{formatCurrency(ex.amount)}</span>
@@ -1834,6 +1896,15 @@ export function BudgetPage() {
                                                   key={targetCat.id}
                                                   onClick={() => {
                                                     updateExpense(ex.id, { categoryId: targetCat.id });
+                                                    // Auto-create bank rule for future matching
+                                                    const kw = ex.merchant || ex.description.split(" ").slice(0, 3).join(" ");
+                                                    if (kw.length >= 3) {
+                                                      upsertBankRule({
+                                                        keyword: kw,
+                                                        routeTo: "category",
+                                                        categoryName: targetCat.name,
+                                                      });
+                                                    }
                                                     setMovingExpense(null);
                                                   }}
                                                   className="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-card hover:bg-primary/10 border border-border hover:border-primary/30 transition-colors"
@@ -1883,27 +1954,33 @@ export function BudgetPage() {
                   const roundingCats = summary.categories.filter(c => c.isRounding);
                   const recRounding = roundingCats.filter(c => recurring.some(r => r.categoryName?.toLowerCase() === c.name.toLowerCase()));
                   const oneoffRounding = roundingCats.filter(c => !recurring.some(r => r.categoryName?.toLowerCase() === c.name.toLowerCase()));
+                  const hasRndFilter = filterCategoryId !== null || filterAccountId !== null;
+                  const visRecRounding = hasRndFilter ? recRounding.filter(c => budgetExpenses.some(e => e.categoryId === c.id)) : recRounding;
+                  const visOneoffRounding = hasRndFilter ? oneoffRounding.filter(c => budgetExpenses.some(e => e.categoryId === c.id)) : oneoffRounding;
+                  if (hasRndFilter && visRecRounding.length === 0 && visOneoffRounding.length === 0) return null;
                   return (
                     <div className="space-y-2">
-                      {recRounding.map(cat => <RoundingCard key={cat.id} cat={cat} recurring={true}
+                      {visRecRounding.map(cat => <RoundingCard key={cat.id} cat={cat} recurring={true}
                         activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
                         expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
                         movingExpense={movingExpense} setMovingExpense={setMovingExpense}
                         movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
-                        setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
-                      {recRounding.length > 0 && oneoffRounding.length > 0 && (
+                        setEditCat={setEditCat} setConfirmDelete={setConfirmDelete}
+                        accounts={accounts} accountLookup={accountLookup} />)}
+                      {visRecRounding.length > 0 && visOneoffRounding.length > 0 && (
                         <div className="flex items-center gap-3 pt-2 pb-1">
                           <div className="h-px flex-1 bg-border" />
                           <span className="text-[11px] font-medium text-muted-foreground/60 uppercase tracking-wider">One-off</span>
                           <div className="h-px flex-1 bg-border" />
                         </div>
                       )}
-                      {oneoffRounding.map(cat => <RoundingCard key={cat.id} cat={cat} recurring={false}
+                      {visOneoffRounding.map(cat => <RoundingCard key={cat.id} cat={cat} recurring={false}
                         activeBudgetId={activeBudgetId} expandedCategory={expandedCategory} setExpandedCategory={setExpandedCategory}
                         expenses={budgetExpenses} summary={summary} updateExpense={updateExpense}
                         movingExpense={movingExpense} setMovingExpense={setMovingExpense}
                         movingRefs={movingRefs} handleConvertToRecurring={handleConvertToRecurring}
-                        setEditCat={setEditCat} setConfirmDelete={setConfirmDelete} />)}
+                        setEditCat={setEditCat} setConfirmDelete={setConfirmDelete}
+                        accounts={accounts} accountLookup={accountLookup} />)}
                     </div>
                   );
                 })()}

@@ -1,7 +1,7 @@
 import { type ReactNode } from "react";
 import { Link, useRoute } from "wouter";
 import {
-  LayoutDashboard, Wallet, Receipt, Target, FileText, Settings, TrendingUp, PieChart, BarChart3,
+  LayoutDashboard, Wallet, Receipt, Target, FileText, Settings, TrendingUp, PieChart, BarChart3, GitCompare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +13,7 @@ const navItems = [
   { label: "Investments", icon: PieChart, href: "/investments" },
   { label: "Scenarios", icon: BarChart3, href: "/scenarios" },
   { label: "Trends", icon: TrendingUp, href: "/trends" },
+  { label: "Flow", icon: GitCompare, href: "/money-flow" },
   { label: "Statements", icon: FileText, href: "/statements" },
   { label: "Settings", icon: Settings, href: "/settings" },
 ];

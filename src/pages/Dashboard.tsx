@@ -554,11 +554,11 @@ export function Dashboard() {
                         )}
                       </>
                     );
-                    return null;
-                  })()}
+                      return null;
+                    })()}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
           </>
         )}
       </div>
