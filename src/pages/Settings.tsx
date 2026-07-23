@@ -198,6 +198,8 @@ function AccountModal({
   const [type, setType] = useState<AccountType>(initial?.type ?? "individual");
   const [balance, setBalance] = useState(initial?.balance != null ? String(initial.balance) : "");
   const [accountNumber, setAccountNumber] = useState(initial?.accountNumber ?? "");
+  const [accountSubType, setAccountSubType] = useState<"everyday" | "growthSaver" | "flexSaver" | "joint" | "">(initial?.accountSubType ?? "");
+  const [owner, setOwner] = useState<"self" | "partner">(initial?.owner ?? "self");
 
   const save = () => {
     if (!name.trim()) { toast.error("Account name is required"); return; }
@@ -206,6 +208,8 @@ function AccountModal({
       type,
       balance: balance ? parseFloat(balance) : undefined,
       accountNumber: accountNumber.trim() || undefined,
+      accountSubType: accountSubType || undefined,
+      owner,
     };
     if (initial) {
       updateAccount(initial.id, payload);
@@ -238,6 +242,42 @@ function AccountModal({
             ))}
           </div>
         </div>
+        <div>
+          <label className="text-sm font-medium text-muted-foreground block mb-2">ANZ Plus Sub-Type</label>
+          <div className="flex gap-1.5 flex-wrap">
+            {([
+              { value: "" as const, label: "None" },
+              { value: "everyday" as const, label: "Everyday" },
+              { value: "growthSaver" as const, label: "Growth Saver" },
+              { value: "flexSaver" as const, label: "Flex Saver" },
+              { value: "joint" as const, label: "Joint" },
+            ]).map(opt => (
+              <button key={opt.value} onClick={() => setAccountSubType(opt.value as typeof accountSubType)}
+                className={cn(
+                  "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                  accountSubType === opt.value
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted text-muted-foreground border-border hover:border-primary/40"
+                )}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="text-sm font-medium text-muted-foreground block mb-2">Owner</label>
+          <div className="flex gap-2">
+            {(["self", "partner"] as const).map(o => (
+              <button key={o} onClick={() => setOwner(o)}
+                className={cn(
+                  "px-4 py-2 rounded-full text-sm font-medium transition-colors capitalize",
+                  owner === o ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80",
+                )}>
+                {o === "self" ? "Self" : "Partner"}
+              </button>
+            ))}
+          </div>
+        </div>
         <Input label="Current Balance (optional)" value={balance} onChange={setBalance} type="number" prefix="$" placeholder="0.00" />
         <Input label="Account/Bank Number (optional)" value={accountNumber} onChange={setAccountNumber} placeholder="e.g. 12345678 or BSB 012-345 123456" />
         <div className="flex gap-2">
@@ -250,7 +290,7 @@ function AccountModal({
 }
 
 export function SettingsPage() {
-  const { budgets, categories, expenses, goals, accounts, bankRules, deleteBankRule, deleteAccount, exportData, importData, selfAge, selfRetirementAge, partnerAge, partnerRetirementAge, updateAgeSettings } = useStore();
+  const { budgets, categories, expenses, goals, accounts, bankRules, deleteBankRule, deleteAccount, exportData, importData, selfAge, selfRetirementAge, partnerAge, partnerRetirementAge, updateAgeSettings, selfAnnualSalary, partnerAnnualSalary, taxYearLabel, medicareExempt, selfSalarySacrifice, partnerSalarySacrifice, updateTaxSettings } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
   const [showBankRule, setShowBankRule] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
@@ -531,6 +571,62 @@ export function SettingsPage() {
           </Card>
         </div>
 
+        {/* Tax Settings */}
+        <div>
+          <SectionHeader title="Tax Settings" />
+          <Card className="mb-2 p-3 bg-primary/5 border-primary/20">
+            <div className="flex items-start gap-3">
+              <div className="w-7 h-7 rounded-lg bg-warning/15 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <SettingsIcon size={15} className="text-warning" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-muted-foreground">
+                  Configure salary and tax year for CGT estimates, super contribution cap tracking, and salary sacrifice comparisons.
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3">
+              <div className="space-y-3 p-3 rounded-lg bg-accent/30">
+                <p className="text-xs font-semibold text-foreground">You</p>
+                <Input label="Annual Salary" type="number" value={selfAnnualSalary != null ? String(selfAnnualSalary) : ""}
+                  onChange={v => updateTaxSettings({ selfAnnualSalary: parseFloat(v) || undefined })} placeholder="e.g. 85000" />
+                <Input label="Salary Sacrifice / yr" type="number" value={selfSalarySacrifice != null ? String(selfSalarySacrifice) : ""}
+                  onChange={v => updateTaxSettings({ selfSalarySacrifice: parseFloat(v) || undefined })} placeholder="e.g. 10000" />
+              </div>
+              <div className="space-y-3 p-3 rounded-lg bg-accent/30">
+                <p className="text-xs font-semibold text-foreground">Partner</p>
+                <Input label="Annual Salary" type="number" value={partnerAnnualSalary != null ? String(partnerAnnualSalary) : ""}
+                  onChange={v => updateTaxSettings({ partnerAnnualSalary: parseFloat(v) || undefined })} placeholder="e.g. 75000" />
+                <Input label="Salary Sacrifice / yr" type="number" value={partnerSalarySacrifice != null ? String(partnerSalarySacrifice) : ""}
+                  onChange={v => updateTaxSettings({ partnerSalarySacrifice: parseFloat(v) || undefined })} placeholder="e.g. 5000" />
+              </div>
+            </div>
+            <div className="mt-3 space-y-3">
+              <div className="flex gap-3 items-end">
+                <div className="flex-1 max-w-[200px]">
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Tax Year</label>
+                  <select
+                    value={taxYearLabel ?? "2026-27"}
+                    onChange={e => updateTaxSettings({ taxYearLabel: e.target.value })}
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="2024-25">FY 2024-25</option>
+                    <option value="2025-26">FY 2025-26</option>
+                    <option value="2026-27">FY 2026-27</option>
+                    <option value="2027-28">FY 2027-28</option>
+                  </select>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer mb-1">
+                  <input type="checkbox" checked={medicareExempt ?? false}
+                    onChange={e => updateTaxSettings({ medicareExempt: e.target.checked })}
+                    className="rounded border-border" />
+                  Medicare exempt
+                </label>
+              </div>
+            </div>
+          </Card>
+        </div>
+
         {/* Bank accounts */}
         <div>
           <SectionHeader
@@ -559,7 +655,12 @@ export function SettingsPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground">{acc.name}</p>
-                    <p className="text-xs text-muted-foreground capitalize">{acc.type} account{acc.balance != null ? <> · balance <span className="font-medium text-foreground">{formatCurrency(acc.balance)}</span></> : ""}</p>
+                    <p className="text-xs text-muted-foreground">
+                      <span className="capitalize">{acc.type}</span>
+                      {acc.accountSubType && <span> · {acc.accountSubType === "flexSaver" ? "Flex Saver" : acc.accountSubType === "growthSaver" ? "Growth Saver" : acc.accountSubType === "everyday" ? "Everyday" : "Joint"}</span>}
+                      {acc.owner && <span> · {acc.owner === "self" ? "Self" : "Partner"}</span>}
+                      {acc.balance != null && <> · balance <span className="font-medium text-foreground">{formatCurrency(acc.balance)}</span></>}
+                    </p>
                   </div>
                   <button
                     onClick={() => { setEditAccount(acc); setShowAccount(true); }}

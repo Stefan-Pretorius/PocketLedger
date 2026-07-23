@@ -51,6 +51,7 @@ function ExpenseModal({
     if (isNaN(amt) || (!initial && amt <= 0)) { toast.error("Enter a valid amount"); return; }
     if (isGoalMode && withdraw) {
       // Withdrawal: subtract from goal
+      const wdrFields = { lastWithdrawalDate: date };
       if (initial) {
         // For edit, let the store's updateExpense handle the balance transition
         const oldGoal = initial.goalId != null ? goals.find(g => g.id === initial.goalId) : null;
@@ -61,15 +62,15 @@ function ExpenseModal({
             ? oldGoal.currentAmount + initial.amount
             : Math.max(0, oldGoal.currentAmount - initial.amount);
           updateGoal(oldGoal.id, { currentAmount: rev });
-          updateGoal(newGoal.id, { currentAmount: Math.max(0, newGoal.currentAmount - amt) });
+          updateGoal(newGoal.id, { currentAmount: Math.max(0, newGoal.currentAmount - amt), ...wdrFields });
         } else if (oldGoal && newGoal && oldGoal.id === newGoal.id) {
           // Reversal logic: reverse old effect and apply new
           const reversed = initial.isWithdrawal
             ? oldGoal.currentAmount + initial.amount
             : Math.max(0, oldGoal.currentAmount - initial.amount);
-          updateGoal(oldGoal.id, { currentAmount: Math.max(0, reversed - amt) });
+          updateGoal(oldGoal.id, { currentAmount: Math.max(0, reversed - amt), ...wdrFields });
         } else if (newGoal && !oldGoal) {
-          updateGoal(newGoal.id, { currentAmount: Math.max(0, newGoal.currentAmount - amt) });
+          updateGoal(newGoal.id, { currentAmount: Math.max(0, newGoal.currentAmount - amt), ...wdrFields });
         } else if (oldGoal && !newGoal) {
           const rev = initial.isWithdrawal
             ? oldGoal.currentAmount + initial.amount
@@ -78,7 +79,7 @@ function ExpenseModal({
         }
       } else {
         const goal = goals.find(g => g.id === goalId);
-        if (goal) updateGoal(goalId, { currentAmount: Math.max(0, goal.currentAmount - amt) });
+        if (goal) updateGoal(goalId, { currentAmount: Math.max(0, goal.currentAmount - amt), ...wdrFields });
       }
     } else if (isGoalMode) {
       // Contribution: add to goal

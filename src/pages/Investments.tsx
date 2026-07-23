@@ -13,6 +13,12 @@ import {
   RefreshCw, Sparkles, User, Users, LayoutGrid, List,
 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  calculateCgtSummary, CGT_REFORM_DATE, getTaxYearRates,
+  calculateTotalIncomeTax, getMarginalRate, getSuperCaps,
+  calculateCarryForward, calculateBringForward,
+} from "../tax";
+import { runMonteCarlo, type McHoldingInput, type McPoint, type McHoldingLine } from "../monte-carlo";
 import { cn } from "@/lib/utils";
 import type { Holding, HoldingType, HoldingTransaction } from "../types";
 
@@ -597,31 +603,28 @@ function TxModal({
 // ─── CGT Section ──────────────────────────────────────────────────────────────
 
 function CgtSection({ txs, holdingName }: { txs: HoldingTransaction[]; holdingName: string }) {
+  const selfAge = useStore(s => s.selfAge);
+  const selfAnnualSalary = useStore(s => s.selfAnnualSalary);
+  const taxYearLabel = useStore(s => s.taxYearLabel);
+
   const sells = txs.filter(t => t.type === "sell").sort((a, b) => a.date.localeCompare(b.date));
   const buys = txs.filter(t => t.type === "buy").sort((a, b) => a.date.localeCompare(b.date));
 
   if (sells.length === 0) return null;
 
-  // Calculate realised gains with holding periods (simplified average cost)
-  const totalBuyCost = buys.reduce((s, t) => s + t.units * t.pricePerUnit, 0);
-  const totalBuyUnits = buys.reduce((s, t) => s + t.units, 0);
-  const avgCostPerUnit = totalBuyUnits > 0 ? totalBuyCost / totalBuyUnits : 0;
+  // Use FIFO-based CGT calculation from tax module
+  const cgtSummary = useMemo(() => {
+    const taxYear = getTaxYearRates(taxYearLabel ?? "2026-27");
+    const marginalRate = selfAnnualSalary
+      ? getMarginalRate(selfAnnualSalary, taxYear)
+      : 0.325; // Default mid-range estimate
+    return calculateCgtSummary(txs, { marginalRate });
+  }, [txs, taxYearLabel, selfAnnualSalary]);
 
-  const cgtEvents = sells.map(sell => {
-    const gainPerUnit = sell.pricePerUnit - avgCostPerUnit;
-    const totalGain = gainPerUnit * sell.units;
-    // Find earliest buy before this sell to estimate holding period
-    const firstBuy = buys.find(b => b.date <= sell.date);
-    const holdingDays = firstBuy
-      ? Math.round((new Date(sell.date).getTime() - new Date(firstBuy.date).getTime()) / (1000 * 60 * 60 * 24))
-      : 0;
-    const discountEligible = holdingDays > 365;
-    return { ...sell, avgCostPerUnit, totalGain, holdingDays, discountEligible };
-  });
+  const { events, totalGrossGain, totalNetCapitalGain, totalDiscount, preReformTotal, postReformTotal } = cgtSummary;
 
-  const totalGain = cgtEvents.reduce((s, e) => s + e.totalGain, 0);
-  const discountableGain = cgtEvents.filter(e => e.discountEligible).reduce((s, e) => s + e.totalGain, 0);
-  const netCapitalGain = totalGain - (discountableGain * 0.5); // 50% CGT discount
+  // Determine if reform applies to any events
+  const hasReformSplit = events.some(e => e.postReformGain > 0);
 
   return (
     <div className="space-y-2">
@@ -630,47 +633,56 @@ function CgtSection({ txs, holdingName }: { txs: HoldingTransaction[]; holdingNa
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <div className="bg-muted rounded-xl p-2 text-center">
             <p className="text-[10px] text-muted-foreground">Total Realised Gain</p>
-            <p className={cn("text-sm font-bold", totalGain >= 0 ? "text-success" : "text-destructive")}>
-              {formatCurrency(totalGain)}
+            <p className={cn("text-sm font-bold", totalGrossGain >= 0 ? "text-success" : "text-destructive")}>
+              {formatCurrency(totalGrossGain)}
             </p>
-          </div>
-          <div className="bg-muted rounded-xl p-2 text-center">
-            <p className="text-[10px] text-muted-foreground">Discount Eligible</p>
-            <p className="text-sm font-bold text-foreground">{formatCurrency(discountableGain)}</p>
           </div>
           <div className="bg-muted rounded-xl p-2 text-center">
             <p className="text-[10px] text-muted-foreground">50% Discount</p>
-            <p className="text-sm font-bold text-success">{formatCurrency(discountableGain * 0.5)}</p>
+            <p className="text-sm font-bold text-success">{formatCurrency(totalDiscount)}</p>
           </div>
           <div className="bg-muted rounded-xl p-2 text-center">
             <p className="text-[10px] text-muted-foreground">Est. Net Capital Gain</p>
-            <p className={cn("text-sm font-bold", netCapitalGain >= 0 ? "text-warning" : "text-success")}>
-              {formatCurrency(netCapitalGain)}
+            <p className={cn("text-sm font-bold", totalNetCapitalGain >= 0 ? "text-warning" : "text-success")}>
+              {formatCurrency(totalNetCapitalGain)}
+            </p>
+          </div>
+          <div className="bg-muted rounded-xl p-2 text-center">
+            <p className="text-[10px] text-muted-foreground">FIFO Cost Basis</p>
+            <p className="text-sm font-bold text-foreground">
+              {formatCurrency(events.reduce((s, e) => s + e.costBasis, 0))}
             </p>
           </div>
         </div>
+        {hasReformSplit && (
+          <div className="bg-info/10 rounded-lg p-2 text-[10px] text-info">
+            CGT reform applies: gains before {CGT_REFORM_DATE} use 50% discount; gains after use CPI indexation + 30% minimum tax.
+          </div>
+        )}
         <p className="text-[10px] text-muted-foreground">
-          Estimate based on average cost basis. The 50% CGT discount applies to assets held &gt;12 months (individuals).
+          FIFO cost basis · Holding period per lot · {hasReformSplit ? "Split pre/post reform treatment" : "50% CGT discount for assets held &gt;12 months"}.
           This is an estimate — consult your accountant.
         </p>
-        {cgtEvents.length > 0 && (
+        {events.length > 0 && (
           <div className="divide-y divide-border -mx-4">
-            {cgtEvents.map((e, i) => (
+            {events.map((e, i) => (
               <div key={i} className="px-4 py-2.5 flex items-center justify-between">
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium text-foreground truncate">
-                    Sold {e.units} units @ {formatCurrency(e.pricePerUnit)}
+                    Sold {e.unitsSold} units @ {formatCurrency(e.transaction.pricePerUnit)}
                   </p>
                   <p className="text-[10px] text-muted-foreground">
-                    {formatDate(e.date)} · Avg cost {formatCurrency(e.avgCostPerUnit)}
-                    {e.discountEligible && <span className="text-success ml-1">✓ &gt;12mo</span>}
+                    {formatDate(e.transaction.date)} · Cost {formatCurrency(e.costBasis)} · {e.holdingDays}d held
+                    {e.longTerm && <span className="text-success ml-1">✓ &gt;12mo</span>}
+                    {e.postReformGain > 0 && <span className="text-info ml-1">post-reform</span>}
                   </p>
                 </div>
                 <div className="text-right ml-2">
-                  <span className={cn("text-xs font-semibold", e.totalGain >= 0 ? "text-success" : "text-destructive")}>
-                    {formatCurrency(e.totalGain)}
+                  <span className={cn("text-xs font-semibold", e.grossGain >= 0 ? "text-success" : "text-destructive")}>
+                    {formatCurrency(e.grossGain)}
                   </span>
-                  {e.discountEligible && <p className="text-[9px] text-success">50% discount</p>}
+                  {e.discountAmount > 0 && <p className="text-[9px] text-success">-{formatCurrency(e.discountAmount)} disc</p>}
+                  {e.minTax30 > 0 && <p className="text-[9px] text-info">30% min tax</p>}
                 </div>
               </div>
             ))}
@@ -976,118 +988,6 @@ function monthsToTarget(
     if (total >= target) return m;
   }
   return Infinity;
-}
-
-// ─── Monte Carlo Simulation ─────────────────────────────────────────────────
-
-function normalRandom(): number {
-  let u = 0, v = 0;
-  while (u === 0) u = Math.random();
-  while (v === 0) v = Math.random();
-  return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-}
-
-interface McHoldingInput {
-  name: string; color: string; startValue: number; monthlyContribution: number; annualReturn: number;
-}
-interface McPoint { month: number; p10: number; p50: number; p90: number }
-interface McHoldingLine { name: string; color: string; points: { month: number; value: number }[] }
-
-function runMonteCarlo(
-  holdings: McHoldingInput[],
-  totalMonths: number,
-  targetValue: number,
-  options?: {
-    simulations?: number; stdDevPct?: number; withdrawalRatePct?: number; inflationPct?: number;
-    oneOffInvestments?: { month: number; amount: number }[];
-    /** When set, withdrawal phase activates at this month (age-based) instead of only when target reached */
-    retireFromMonth?: number;
-  },
-): { points: McPoint[]; holdingLines: McHoldingLine[]; medianMonths: number | null } {
-  const sims = options?.simulations ?? 500;
-  const stdDev = options?.stdDevPct ?? 15;
-  const withdrawalRate = options?.withdrawalRatePct;
-  const inflation = options?.inflationPct ?? 0;
-  const oneOffs = options?.oneOffInvestments ?? [];
-  const retireFromMonth = options?.retireFromMonth;
-  const totalYears = Math.ceil(totalMonths / 12);
-  const nh = holdings.length;
-
-  // Pre-compute effective returns
-  const effReturns = holdings.map(h => Math.max(h.annualReturn - inflation, 0));
-
-  // Per-simulation: aggregate path + per-holding paths
-  const aggPaths: number[][] = Array.from({ length: sims }, () => []);
-  const hPaths: number[][][] = holdings.map(() => Array.from({ length: sims }, () => [] as number[]));
-
-  for (let sim = 0; sim < sims; sim++) {
-    const vals = holdings.map(h => h.startValue);
-    const aggVals: number[] = [vals.reduce((a, b) => a + b, 0)];
-    const hSimPaths = hPaths.map(p => p[sim]);
-    for (let hi = 0; hi < nh; hi++) hSimPaths[hi].push(vals[hi]);
-    aggPaths[sim].push(aggVals[0]);
-
-    // Pre-generate annual returns per holding
-    const annRets: number[][] = holdings.map((_, hi) => {
-      const rets: number[] = [];
-      for (let y = 0; y < totalYears; y++) rets.push(Math.max(effReturns[hi] + normalRandom() * stdDev, -99));
-      return rets;
-    });
-
-    let isWithdrawing = false;
-    for (let m = 1; m <= totalMonths; m++) {
-      if (!isWithdrawing) {
-        if (withdrawalRate != null) {
-          // Activate at retirement age (when set) or on target reached (fallback)
-          if (retireFromMonth != null ? m >= retireFromMonth : aggVals[m - 1] >= targetValue) {
-            isWithdrawing = true;
-          }
-        }
-      }
-      // Distribute one-off investments proportionally
-      const oneOff = oneOffs.find(o => o.month === m);
-      if (oneOff) {
-        const totalVal = vals.reduce((a, b) => a + b, 0);
-        if (totalVal > 0) {
-          for (let hi = 0; hi < nh; hi++) vals[hi] += oneOff.amount * (vals[hi] / totalVal);
-        }
-      }
-      const yi = Math.floor((m - 1) / 12);
-      for (let hi = 0; hi < nh; hi++) {
-        const monthlyR = Math.pow(1 + annRets[hi][yi] / 100, 1 / 12) - 1;
-        let contrib = holdings[hi].monthlyContribution;
-        if (isWithdrawing && withdrawalRate != null) contrib = -vals[hi] * (withdrawalRate / 100 / 12);
-        vals[hi] = vals[hi] * (1 + monthlyR) + contrib;
-        if (vals[hi] < 0) vals[hi] = 0;
-        hSimPaths[hi].push(vals[hi]);
-      }
-      const total = vals.reduce((a, b) => a + b, 0);
-      aggPaths[sim].push(total);
-      aggVals.push(total);
-    }
-  }
-
-  const points: McPoint[] = [];
-  for (let m = 0; m <= totalMonths; m++) {
-    const vals = aggPaths.map(p => p[m]).sort((a, b) => a - b);
-    points.push({ month: m, p10: vals[Math.floor(vals.length * 0.1)], p50: vals[Math.floor(vals.length * 0.5)], p90: vals[Math.floor(vals.length * 0.9)] });
-  }
-
-  const holdingLines: McHoldingLine[] = holdings.map((h, hi) => {
-    const pts: { month: number; value: number }[] = [];
-    for (let m = 0; m <= totalMonths; m++) {
-      const vals = hPaths[hi].map(p => p[m]).sort((a, b) => a - b);
-      pts.push({ month: m, value: vals[Math.floor(vals.length * 0.5)] });
-    }
-    return { name: h.name, color: h.color, points: pts };
-  });
-
-  let medianMonths: number | null = null;
-  for (let m = 1; m <= totalMonths; m++) {
-    if (points[m].p50 >= targetValue) { medianMonths = m; break; }
-  }
-
-  return { points, holdingLines, medianMonths };
 }
 
 // ─── Monte Carlo Fan Chart ──────────────────────────────────────────────────
@@ -1520,7 +1420,7 @@ function MillionaireProjection({ summaries }: { summaries: { holding: Holding; m
                     </span>
                   )}
                   {s.holding.type === "super" && (
-                    <span className="text-[9px] text-muted-foreground/60 whitespace-nowrap">max $30K/yr pre-tax</span>
+                    <span className="text-[9px] text-muted-foreground/60 whitespace-nowrap">max $32.5K/yr pre-tax (FY26-27)</span>
                   )}
                   </div>
                   <div className="flex items-center gap-1">

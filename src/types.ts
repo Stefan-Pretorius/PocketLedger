@@ -1,12 +1,18 @@
 export type AccountType = "individual" | "joint";
 export type PayFrequency = "weekly" | "fortnightly" | "monthly";
 
+export type Owner = "self" | "partner";
+
 export interface Account {
   id: number;
   name: string;
   type: AccountType;
   balance?: number;
   accountNumber?: string;
+  /** Which partner owns this account */
+  owner?: Owner;
+  /** ANZ Plus account sub-type for goal/bonus interest tracking */
+  accountSubType?: "everyday" | "growthSaver" | "flexSaver" | "joint";
   createdAt: string;
 }
 
@@ -20,6 +26,8 @@ export interface Budget {
   /** Unallocated money carried forward from a previous period */
   carryoverAmount?: number;
   notes?: string;
+  /** Which partner owns this budget */
+  owner?: Owner;
   createdAt: string;
 }
 
@@ -86,6 +94,20 @@ export interface Goal {
   deadline?: string;
   color: string;
   icon: string;
+  /** Which partner owns this goal */
+  owner?: Owner;
+  /** Link to the bank account holding this goal's money */
+  accountId?: number;
+  /** Goal type for UI behaviour */
+  goalType?: "anzPlus" | "manual" | "investment";
+  /** Scheduled auto-contribution amount */
+  autoContributionAmount?: number;
+  /** Scheduled auto-contribution frequency */
+  autoContributionFrequency?: PayFrequency;
+  /** ANZ Plus bonus interest rate (annual %, e.g. 5.5 for 5.5%) */
+  bonusInterestRate?: number;
+  /** Date of last goal withdrawal (for bonus interest eligibility tracking) */
+  lastWithdrawalDate?: string;
   createdAt: string;
 }
 

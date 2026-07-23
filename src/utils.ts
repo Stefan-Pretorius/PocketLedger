@@ -201,22 +201,30 @@ export function computeSankeyData(
   for (const inc of summary.incomeSources) {
     const incId = `inc-${inc.id}`;
     addNode(incId, inc.name, Colors.success, 0);
+    const val = monthlyIncomeAmount(inc.amount, inc.frequency);
     if (inc.accountId != null) {
       const a = accounts.get(inc.accountId);
       if (a) {
         const accId = `acc-${inc.accountId}`;
         addNode(accId, a.name, Colors.primary, 1);
-        links.push({ source: incId, target: accId, value: monthlyIncomeAmount(inc.amount, inc.frequency), color: Colors.success });
+        links.push({ source: incId, target: accId, value: val, color: Colors.success });
+        continue;
       }
     }
+    addNode("acc-unallocated", "Unassigned", "#94a3b8", 1);
+    links.push({ source: incId, target: "acc-unallocated", value: val, color: Colors.success });
   }
 
   // Helper: create links from accounts to a target node with account breakdown
   const linkAccountsTo = (targetId: string, color: string, filter: (exp: Expense) => boolean) => {
     const byAccount = new Map<number, number>();
+    let total = 0;
     for (const exp of periodExpenses) {
-      if (filter(exp) && exp.accountId != null) {
-        byAccount.set(exp.accountId, (byAccount.get(exp.accountId) ?? 0) + exp.amount);
+      if (filter(exp)) {
+        total += exp.amount;
+        if (exp.accountId != null) {
+          byAccount.set(exp.accountId, (byAccount.get(exp.accountId) ?? 0) + exp.amount);
+        }
       }
     }
     for (const [accId, val] of byAccount) {
@@ -227,12 +235,11 @@ export function computeSankeyData(
         links.push({ source: accIdStr, target: targetId, value: val, color });
       }
     }
-    const totalFromAccounts = [...byAccount.values()].reduce((s, v) => s + v, 0);
-    const totalFromLinks = links.filter(l => l.target === targetId).reduce((s, l) => s + l.value, 0);
-    const remainder = totalFromLinks - totalFromAccounts;
-    if (remainder > 0) {
-      addNode("acc-unknown", "Unknown", "#94a3b8", 1);
-      links.push({ source: "acc-unknown", target: targetId, value: remainder, color });
+    const linked = [...byAccount.values()].reduce((s, v) => s + v, 0);
+    const remainder = total - linked;
+    if (remainder > 0.01) {
+      addNode("acc-unallocated", "Unassigned", "#94a3b8", 1);
+      links.push({ source: "acc-unallocated", target: targetId, value: remainder, color });
     }
   };
 

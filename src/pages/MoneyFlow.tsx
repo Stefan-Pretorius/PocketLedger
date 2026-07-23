@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useStore } from "../store";
 import { getBudgetDateRange, computeSankeyData, monthlyCategoryAmount, formatCurrency } from "../utils";
 import { EmptyState } from "../components/ui";
@@ -15,7 +15,22 @@ export function MoneyFlowPage() {
     return { month: d.getMonth() + 1, year: d.getFullYear() };
   }, []);
 
+  const [selectedYear, setSelectedYear] = useState(cm.year);
+
   const summary = activeBudgetId ? getBudgetSummary(activeBudgetId) : null;
+
+  useEffect(() => {
+    if (activeBudgetId) return;
+    const match = budgets.find(b => b.year === cm.year && b.month === cm.month);
+    if (match) setActiveBudget(match.id);
+    else if (budgets.length > 0) {
+      const latest = [...budgets].sort((a, b) =>
+        b.year !== a.year ? b.year - a.year : b.month - a.month,
+      )[0];
+      setSelectedYear(latest.year);
+      setActiveBudget(latest.id);
+    }
+  }, [budgets, activeBudgetId, cm.year, cm.month, setActiveBudget]);
 
   const [verifyMode, setVerifyMode] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -33,7 +48,6 @@ export function MoneyFlowPage() {
     return computeSankeyData(summary, expenses, goals, accounts);
   }, [summary, expenses, goals, accounts]);
 
-  // Build checklist items from summary categories (non-rounding, with spending or allocation)
   const checklistItems = useMemo(() => {
     if (!summary || !verifyMode) return [];
     return summary.categories
@@ -70,9 +84,9 @@ export function MoneyFlowPage() {
       <div className="px-4 sm:px-6 space-y-5 pb-6">
         {budgets.length > 0 && (
           <>
-            <BudgetYearTabs selectedYear={cm.year} onSelectYear={() => {}} />
+            <BudgetYearTabs selectedYear={selectedYear} onSelectYear={setSelectedYear} />
             <BudgetMonthGrid
-              year={cm.year}
+              year={selectedYear}
               activeBudgetId={activeBudgetId}
               onSelect={setActiveBudget}
               onCreateMonth={(month, year) => window.location.href = `/budget`}

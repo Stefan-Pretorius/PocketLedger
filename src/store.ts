@@ -28,6 +28,18 @@ export interface StoreData {
   selfRetirementAge?: number;
   partnerAge?: number;
   partnerRetirementAge?: number;
+  /** Annual salary for tax calculations */
+  selfAnnualSalary?: number;
+  partnerAnnualSalary?: number;
+  /** Current tax year label (e.g. "2026-27") */
+  taxYearLabel?: string;
+  /** Medicare levy exempt (e.g. foreign resident, certain visa holders) */
+  medicareExempt?: boolean;
+  /** Existing salary sacrifice amount per year */
+  selfSalarySacrifice?: number;
+  partnerSalarySacrifice?: number;
+  /** Unused concessional caps from prior years (for carry-forward) */
+  unusedConcessionalCaps?: number[];
 }
 
 const STORAGE_KEY = "pocketledger_data";
@@ -54,7 +66,7 @@ function load(): StoreData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [], scenarios: [], lastRefreshedAt: undefined, selfAge: undefined, selfRetirementAge: undefined, partnerAge: undefined, partnerRetirementAge: undefined };
+  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [], scenarios: [], lastRefreshedAt: undefined, selfAge: undefined, selfRetirementAge: undefined, partnerAge: undefined, partnerRetirementAge: undefined, selfAnnualSalary: undefined, partnerAnnualSalary: undefined, taxYearLabel: undefined, medicareExempt: undefined, selfSalarySacrifice: undefined, partnerSalarySacrifice: undefined, unusedConcessionalCaps: undefined };
 }
 
 function save(data: StoreData) {
@@ -79,6 +91,10 @@ function snapshot(s: AppState): StoreData {
     importedStatements: s.importedStatements, budgetSections: s.budgetSections, scenarios: s.scenarios,
     lastRefreshedAt: s.lastRefreshedAt,
     selfAge: s.selfAge, selfRetirementAge: s.selfRetirementAge, partnerAge: s.partnerAge, partnerRetirementAge: s.partnerRetirementAge,
+    selfAnnualSalary: s.selfAnnualSalary, partnerAnnualSalary: s.partnerAnnualSalary,
+    taxYearLabel: s.taxYearLabel, medicareExempt: s.medicareExempt,
+    selfSalarySacrifice: s.selfSalarySacrifice, partnerSalarySacrifice: s.partnerSalarySacrifice,
+    unusedConcessionalCaps: s.unusedConcessionalCaps,
   };
 }
 
@@ -223,6 +239,16 @@ interface AppState extends StoreData {
   partnerRetirementAge: number | undefined;
 
   updateAgeSettings: (settings: { selfAge?: number; selfRetirementAge?: number; partnerAge?: number; partnerRetirementAge?: number }) => void;
+
+  updateTaxSettings: (settings: {
+    selfAnnualSalary?: number;
+    partnerAnnualSalary?: number;
+    taxYearLabel?: string;
+    medicareExempt?: boolean;
+    selfSalarySacrifice?: number;
+    partnerSalarySacrifice?: number;
+    unusedConcessionalCaps?: number[];
+  }) => void;
 
   scenarios: ScenarioConfig[];
   createScenario: (s: Omit<ScenarioConfig, "id" | "createdAt" | "updatedAt">) => ScenarioConfig;
@@ -1007,7 +1033,7 @@ export const useStore = create<AppState>()((set, get) => ({
       if (tx.goalWithdrawalId != null && pairedWithdrawals.has(i)) {
         const goal = get().goals.find(g => g.id === tx.goalWithdrawalId);
         if (goal) {
-          get().updateGoal(tx.goalWithdrawalId, { currentAmount: Math.max(0, goal.currentAmount - tx.amount) });
+          get().updateGoal(tx.goalWithdrawalId, { currentAmount: Math.max(0, goal.currentAmount - tx.amount), lastWithdrawalDate: tx.date });
           goalWithdrawalCount++;
           // Don't create a separate expense — the merchant will get fundedByGoalId
         }
@@ -1018,7 +1044,7 @@ export const useStore = create<AppState>()((set, get) => ({
       if (tx.goalWithdrawalId != null) {
         const goal = get().goals.find(g => g.id === tx.goalWithdrawalId);
         if (goal) {
-          get().updateGoal(tx.goalWithdrawalId, { currentAmount: Math.max(0, goal.currentAmount - tx.amount) });
+          get().updateGoal(tx.goalWithdrawalId, { currentAmount: Math.max(0, goal.currentAmount - tx.amount), lastWithdrawalDate: tx.date });
           get().createExpense({
             budgetId: txBudgetId,
             categoryId: tx.categoryId ?? undefined,
@@ -1449,6 +1475,11 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   updateAgeSettings: (settings) => {
+    set(settings);
+    save(snapshot(get()));
+  },
+
+  updateTaxSettings: (settings) => {
     set(settings);
     save(snapshot(get()));
   },

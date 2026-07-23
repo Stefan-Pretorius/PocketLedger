@@ -479,6 +479,11 @@ export function Dashboard() {
                           <div className="flex items-center gap-2 min-w-0">
                             <ColorDot color={g.color} size={10} />
                             <span className="text-sm font-medium text-foreground truncate">{g.name}</span>
+                            {g.goalType === "anzPlus" && g.bonusInterestRate != null && g.bonusInterestRate > 0 && (
+                              <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex-shrink-0">
+                                {g.bonusInterestRate}% p.a.
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-1.5 flex-shrink-0">
                             <span className="text-xs text-muted-foreground">

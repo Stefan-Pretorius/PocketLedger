@@ -1148,6 +1148,7 @@ function BudgetPrintModal({ visible, onClose }: { visible: boolean; onClose: () 
                       {cats.map((cat: any) => {
                         const monthly = catMonthly(cat);
                         const spent = cat.spent ?? 0;
+                        const available = monthly - spent;
                         const pct = monthly > 0 ? spent / monthly : 0;
                         const overBudget = monthly > 0 && spent > monthly;
                         const linkedGoal = cat.linkedGoalId != null ? goalLookup.get(cat.linkedGoalId) : null;
@@ -1157,10 +1158,15 @@ function BudgetPrintModal({ visible, onClose }: { visible: boolean; onClose: () 
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between">
                                 <span className="text-xs text-foreground font-medium truncate">{cat.name}{cat.frequency && cat.frequency !== "monthly" ? cat.frequency === "weekly" ? " /wk" : " /fn" : ""}</span>
-                                <span className="text-xs" style={{ color: overBudget ? "var(--danger)" : "var(--foreground)" }}>
-                                  {formatCurrency(monthly)} alloc
-                                  {monthly > 0 && <> · {formatCurrency(spent)} spent</>}
-                                </span>
+                                <div className="flex items-center gap-2 text-xs">
+                                  <span className="text-muted-foreground">{formatCurrency(spent)} spent</span>
+                                  <span className={cn(
+                                    "font-medium",
+                                    overBudget ? "text-destructive" : available > 0 ? "text-success" : "text-muted-foreground"
+                                  )}>
+                                    {overBudget ? "-" : ""}{formatCurrency(Math.abs(available))} {overBudget ? "over" : "left"}
+                                  </span>
+                                </div>
                               </div>
                               {monthly > 0 && (
                                 <div className="h-1 rounded-full bg-muted overflow-hidden mt-0.5">
@@ -1286,6 +1292,10 @@ export function BudgetPage() {
   const [confirmDelete, setConfirmDelete] = useState<{ type: "budget" | "category" | "income" | "recurring"; id: number } | null>(null);
   const [filterCategoryId, setFilterCategoryId] = useState<number | "uncategorized" | null>(null);
   const [filterAccountId, setFilterAccountId] = useState<number | null>(null);
+  const [showReallocate, setShowReallocate] = useState(false);
+  const [reallocateFrom, setReallocateFrom] = useState<number | null>(null);
+  const [reallocateTo, setReallocateTo] = useState<number | null>(null);
+  const [reallocateAmount, setReallocateAmount] = useState("");
   const accountLookup = useMemo(() => new Map(accounts.map(a => [a.id, a])), [accounts]);
   const [viewMode, setViewMode] = useState<"cards" | "compact" | "list">(() => (localStorage.getItem("budgetView") as "cards" | "compact" | "list") ?? "cards");
   const setView = (mode: "cards" | "compact" | "list") => { setViewMode(mode); localStorage.setItem("budgetView", mode); };
@@ -1394,6 +1404,30 @@ export function BudgetPage() {
     setShowNewBudget(true);
   };
 
+  const handleReallocate = () => {
+    if (reallocateFrom == null || reallocateTo == null || reallocateFrom === reallocateTo) {
+      toast.error("Select different source and destination categories");
+      return;
+    }
+    const amt = parseFloat(reallocateAmount);
+    if (isNaN(amt) || amt <= 0) { toast.error("Enter a valid amount"); return; }
+    const fromCat = categories.find(c => c.id === reallocateFrom);
+    const toCat = categories.find(c => c.id === reallocateTo);
+    if (!fromCat || !toCat) return;
+    const fromMonthly = fromCat.frequency === "weekly" ? fromCat.allocatedAmount * 52 / 12 : fromCat.frequency === "fortnightly" ? fromCat.allocatedAmount * 26 / 12 : fromCat.allocatedAmount;
+    if (amt > fromMonthly) { toast.error("Amount exceeds available allocation in source"); return; }
+    // Reverse the frequency to get the per-period amount to subtract
+    const fromPerPeriod = fromCat.frequency === "weekly" ? amt * 12 / 52 : fromCat.frequency === "fortnightly" ? amt * 12 / 26 : amt;
+    const toPerPeriod = toCat.frequency === "weekly" ? amt * 12 / 52 : toCat.frequency === "fortnightly" ? amt * 12 / 26 : amt;
+    updateCategory(reallocateFrom, { allocatedAmount: Math.max(0, (fromCat.allocatedAmount ?? 0) - fromPerPeriod) });
+    updateCategory(reallocateTo, { allocatedAmount: (toCat.allocatedAmount ?? 0) + toPerPeriod });
+    toast.success(`Moved ${formatCurrency(amt)} from "${fromCat.name}" to "${toCat.name}"`);
+    setShowReallocate(false);
+    setReallocateFrom(null);
+    setReallocateTo(null);
+    setReallocateAmount("");
+  };
+
   return (
     <div>
       <PageHeader
@@ -1467,6 +1501,20 @@ export function BudgetPage() {
                     <span className="text-warning">Uncategorized: {formatCurrency(summary.uncategorizedTotal)}</span>
                   )}
                   <span>Remaining after spend: {formatCurrency(summary.remaining)}</span>
+                  {(() => {
+                    const { startDate, endDate } = getBudgetDateRange(activeBudget);
+                    const start = new Date(startDate);
+                    const end = new Date(endDate);
+                    const totalDays = Math.max(1, (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+                    const now = new Date();
+                    const daysPassed = Math.max(1, Math.min(totalDays, (now.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
+                    const dailySpendRate = summary.totalSpent / daysPassed;
+                    const ageOfMoney = dailySpendRate > 0 ? Math.round(summary.remaining / dailySpendRate) : null;
+                    if (ageOfMoney != null && ageOfMoney >= 0) {
+                      return <span className={cn(ageOfMoney > 7 ? "text-success" : ageOfMoney > 0 ? "text-warning" : "text-destructive")}>Age of money: ~{ageOfMoney} day{ageOfMoney !== 1 ? "s" : ""}</span>;
+                    }
+                    return null;
+                  })()}
                 </div>
               )}
               {summary.totalAllocated > 0 && (
@@ -1475,6 +1523,42 @@ export function BudgetPage() {
                 </div>
               )}
             </Card>
+
+            {/* Ready to Assign Banner */}
+            {summary.unallocated !== 0 && (
+              <div className={cn(
+                "rounded-xl border p-4 transition-colors",
+                summary.unallocated > 0
+                  ? "bg-primary/5 border-primary/20"
+                  : "bg-destructive/5 border-destructive/20"
+              )}>
+                <div className="flex items-center gap-3">
+                  <div className={cn(
+                    "w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0",
+                    summary.unallocated > 0 ? "bg-primary/15" : "bg-destructive/15"
+                  )}>
+                    <Wallet size={18} className={summary.unallocated > 0 ? "text-primary" : "text-destructive"} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Ready to Assign</p>
+                    </div>
+                    <p className={cn(
+                      "text-2xl font-bold",
+                      summary.unallocated > 0 ? "text-primary" : "text-destructive"
+                    )}>
+                      {formatCurrency(summary.unallocated)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {summary.unallocated > 0
+                        ? "Assign this to categories to give every dollar a job"
+                        : "You've assigned more than your income — move money from overspent categories"}
+                    </p>
+                  </div>
+                  <Button label="Reallocate" onClick={() => setShowReallocate(true)} variant="secondary" size="sm" icon={MoveRight} />
+                </div>
+              </div>
+            )}
 
             {/* Budget Health */}
             {(() => {
@@ -2075,6 +2159,36 @@ export function BudgetPage() {
       {editRecurring && <RecurringModal visible onClose={() => setEditRecurring(null)} initial={editRecurring} />}
       <ApplyResultModal visible={!!applyResult} onClose={() => setApplyResult(null)} result={applyResult} />
       <BudgetPrintModal visible={showPrint} onClose={() => setShowPrint(false)} />
+      <Modal visible={showReallocate} onClose={() => setShowReallocate(false)} title="Reallocate Funds">
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">Move money between categories to rebalance your budget.</p>
+          <div>
+            <label className="text-sm font-medium text-muted-foreground block mb-1">From Category</label>
+            <select value={reallocateFrom ?? ""} onChange={e => setReallocateFrom(e.target.value ? Number(e.target.value) : null)}
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm">
+              <option value="">Select category...</option>
+              {summary?.categories.filter(c => !c.isRounding).map(c => (
+                <option key={c.id} value={c.id}>{c.name} ({formatCurrency(c.allocatedAmount)}/mo)</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-sm font-medium text-muted-foreground block mb-1">To Category</label>
+            <select value={reallocateTo ?? ""} onChange={e => setReallocateTo(e.target.value ? Number(e.target.value) : null)}
+              className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm">
+              <option value="">Select category...</option>
+              {summary?.categories.filter(c => !c.isRounding && c.id !== reallocateFrom).map(c => (
+                <option key={c.id} value={c.id}>{c.name} ({formatCurrency(c.allocatedAmount)}/mo)</option>
+              ))}
+            </select>
+          </div>
+          <Input label="Amount (monthly)" value={reallocateAmount} onChange={setReallocateAmount} type="number" prefix="$" placeholder="0.00" />
+          <div className="flex gap-2">
+            <Button label="Cancel" onClick={() => setShowReallocate(false)} variant="secondary" fullWidth />
+            <Button label="Move Funds" onClick={handleReallocate} variant="primary" fullWidth />
+          </div>
+        </div>
+      </Modal>
       <CopyBudgetModal
         visible={showCopy}
         onClose={() => setShowCopy(false)}
