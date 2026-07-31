@@ -232,6 +232,15 @@ export interface ScenarioConfig {
   updatedAt: string;
 }
 
+export interface PlannerScenario {
+  id: number;
+  tabId: string;
+  name: string;
+  inputs: Record<string, number | boolean | string>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ImportedStatement {
   id: number;
   fileName: string;

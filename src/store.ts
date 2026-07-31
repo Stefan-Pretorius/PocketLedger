@@ -3,7 +3,7 @@ import type {
   Account, Budget, Category, Expense, Goal, RecurringExpense,
   IncomeSource, BankMappingRule, BudgetSummary,
   Holding, HoldingTransaction, HoldingSummary, PortfolioSummary,
-  ImportedStatement, ScenarioConfig,
+  ImportedStatement, ScenarioConfig, PlannerScenario,
 } from "./types";
 import { getBudgetDateRange, getRecurringDatesInMonth, monthlyIncomeAmount, monthlyCategoryAmount } from "./utils";
 import { autoSaveToDir } from "./backup";
@@ -40,6 +40,11 @@ export interface StoreData {
   partnerSalarySacrifice?: number;
   /** Unused concessional caps from prior years (for carry-forward) */
   unusedConcessionalCaps?: number[];
+
+  /** Saved planner scenarios per tab */
+  plannerScenarios: PlannerScenario[];
+  /** Current working inputs per tab (persistent transient state) */
+  plannerInputs: Record<string, Record<string, number | boolean | string>>;
 }
 
 const STORAGE_KEY = "pocketledger_data";
@@ -66,7 +71,7 @@ function load(): StoreData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [], scenarios: [], lastRefreshedAt: undefined, selfAge: undefined, selfRetirementAge: undefined, partnerAge: undefined, partnerRetirementAge: undefined, selfAnnualSalary: undefined, partnerAnnualSalary: undefined, taxYearLabel: undefined, medicareExempt: undefined, selfSalarySacrifice: undefined, partnerSalarySacrifice: undefined, unusedConcessionalCaps: undefined };
+  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [], scenarios: [], plannerScenarios: [], plannerInputs: {}, lastRefreshedAt: undefined, selfAge: undefined, selfRetirementAge: undefined, partnerAge: undefined, partnerRetirementAge: undefined, selfAnnualSalary: undefined, partnerAnnualSalary: undefined, taxYearLabel: undefined, medicareExempt: undefined, selfSalarySacrifice: undefined, partnerSalarySacrifice: undefined, unusedConcessionalCaps: undefined };
 }
 
 function save(data: StoreData) {
@@ -95,6 +100,8 @@ function snapshot(s: AppState): StoreData {
     taxYearLabel: s.taxYearLabel, medicareExempt: s.medicareExempt,
     selfSalarySacrifice: s.selfSalarySacrifice, partnerSalarySacrifice: s.partnerSalarySacrifice,
     unusedConcessionalCaps: s.unusedConcessionalCaps,
+    plannerScenarios: s.plannerScenarios,
+    plannerInputs: s.plannerInputs,
   };
 }
 
@@ -254,6 +261,12 @@ interface AppState extends StoreData {
   createScenario: (s: Omit<ScenarioConfig, "id" | "createdAt" | "updatedAt">) => ScenarioConfig;
   updateScenario: (id: number, s: Partial<ScenarioConfig>) => void;
   deleteScenario: (id: number) => void;
+
+  plannerScenarios: PlannerScenario[];
+  plannerInputs: Record<string, Record<string, number | boolean | string>>;
+  savePlannerScenario: (tabId: string, name: string, inputs: Record<string, number | boolean | string>) => PlannerScenario;
+  deletePlannerScenario: (id: number) => void;
+  setPlannerInputs: (tabId: string, inputs: Record<string, number | boolean | string>) => void;
 }
 
 export const useStore = create<AppState>()((set, get) => ({
@@ -262,6 +275,8 @@ export const useStore = create<AppState>()((set, get) => ({
   importedStatements: [],
   budgetSections: [],
   activeBudgetId: null, loading: true, lastRefreshedAt: undefined, selfAge: undefined, selfRetirementAge: undefined, partnerAge: undefined, partnerRetirementAge: undefined, scenarios: [],
+  plannerScenarios: [],
+  plannerInputs: {},
 
   init: () => {
     const data = load();
@@ -1549,5 +1564,29 @@ export const useStore = create<AppState>()((set, get) => ({
     }
     set({ ...imported, activeBudgetId: imported.budgets[0]?.id ?? null });
     save(imported);
+  },
+
+  savePlannerScenario: (tabId, name, inputs) => {
+    const existing = get().plannerScenarios.find(s => s.tabId === tabId && s.name === name);
+    if (existing) {
+      const updated = { ...existing, inputs, updatedAt: now() };
+      set(st => ({ plannerScenarios: st.plannerScenarios.map(s => s.id === existing.id ? updated : s) }));
+      save(snapshot(get()));
+      return updated;
+    }
+    const sc: PlannerScenario = { id: nextId(), tabId, name, inputs, createdAt: now(), updatedAt: now() };
+    set(st => ({ plannerScenarios: [...st.plannerScenarios, sc] }));
+    save(snapshot(get()));
+    return sc;
+  },
+
+  deletePlannerScenario: (id) => {
+    set(st => ({ plannerScenarios: st.plannerScenarios.filter(s => s.id !== id) }));
+    save(snapshot(get()));
+  },
+
+  setPlannerInputs: (tabId, inputs) => {
+    set(st => ({ plannerInputs: { ...st.plannerInputs, [tabId]: { ...st.plannerInputs[tabId], ...inputs } } }));
+    save(snapshot(get()));
   },
 }));
