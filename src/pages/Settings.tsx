@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import type { Account, AccountType } from "../types";
 import { getDirHandle, setDirHandle, removeDirHandle, autoSaveToDir, pickBackupFolder, getImportDirHandle, setImportDirHandle, removeImportDirHandle, pickImportFolder } from "../backup";
 import { getClientId, setClientId, getStoredToken, getLastSyncTime, getConnectedEmail, authenticate, uploadToDrive, downloadFromDrive, downloadFileContent, revokeAccess, getStatementFolderId, setStatementFolderId, removeStatementFolderId, listStatementFiles } from "../googledrive";
+import { getSuperCaps, calculateCarryForward } from "../tax/super";
 
 function formatRelativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -22,6 +23,30 @@ function formatRelativeTime(ts: number): string {
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
   return `${Math.floor(diff / 86400000)}d ago`;
+}
+
+function salarySacrificeInfo(
+  annualSalary: number | undefined,
+  currentSacrifice: number | undefined,
+  superBalance: number | undefined,
+  unusedConcessionalCaps: number[] | undefined,
+  fyLabel: string | undefined,
+) {
+  const caps = getSuperCaps(fyLabel ?? "2026-27");
+  const salary = annualSalary ?? 0;
+  const sg = Math.min(salary * caps.sgRate, caps.maxSgBase * caps.sgRate);
+  const currentCC = sg + (currentSacrifice ?? 0);
+  const annualRoom = Math.max(0, caps.concessionalCap - currentCC);
+  const carryForward = calculateCarryForward(
+    superBalance ?? 0,
+    unusedConcessionalCaps ?? [],
+    caps.concessionalCap,
+  ) - caps.concessionalCap;
+  return {
+    caps, sg, currentCC, annualRoom,
+    carryForward: Math.max(0, carryForward),
+    maxAvailable: annualRoom + Math.max(0, carryForward),
+  };
 }
 
 function BankRuleModal({
@@ -290,7 +315,7 @@ function AccountModal({
 }
 
 export function SettingsPage() {
-  const { budgets, categories, expenses, goals, accounts, bankRules, deleteBankRule, deleteAccount, exportData, importData, selfAge, selfRetirementAge, partnerAge, partnerRetirementAge, updateAgeSettings, selfAnnualSalary, partnerAnnualSalary, taxYearLabel, medicareExempt, selfSalarySacrifice, partnerSalarySacrifice, updateTaxSettings } = useStore();
+  const { budgets, categories, expenses, goals, accounts, bankRules, deleteBankRule, deleteAccount, exportData, importData, selfAge, selfRetirementAge, partnerAge, partnerRetirementAge, updateAgeSettings, selfAnnualSalary, partnerAnnualSalary, taxYearLabel, medicareExempt, selfSalarySacrifice, partnerSalarySacrifice, updateTaxSettings, holdings, getHoldingSummary, unusedConcessionalCaps } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
   const [showBankRule, setShowBankRule] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
@@ -298,6 +323,16 @@ export function SettingsPage() {
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState<number | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmImport, setConfirmImport] = useState<string | null>(null);
+
+  const superBalanceFor = (owner: "self" | "partner") =>
+    holdings
+      .filter(h => h.type === "super" && h.owner === owner)
+      .reduce((sum, h) => sum + (getHoldingSummary(h.id)?.marketValue ?? 0), 0);
+
+  const selfSuper = superBalanceFor("self");
+  const partnerSuper = superBalanceFor("partner");
+  const selfSsi = salarySacrificeInfo(selfAnnualSalary, selfSalarySacrifice, selfSuper, unusedConcessionalCaps, taxYearLabel);
+  const partnerSsi = salarySacrificeInfo(partnerAnnualSalary, partnerSalarySacrifice, partnerSuper, unusedConcessionalCaps, taxYearLabel);
 
   // Folder backup state
   const [folderReady, setFolderReady] = useState(false);
@@ -592,6 +627,23 @@ export function SettingsPage() {
                   onChange={v => updateTaxSettings({ selfAnnualSalary: parseFloat(v) || undefined })} placeholder="e.g. 85000" />
                 <Input label="Salary Sacrifice / yr" type="number" value={selfSalarySacrifice != null ? String(selfSalarySacrifice) : ""}
                   onChange={v => updateTaxSettings({ selfSalarySacrifice: parseFloat(v) || undefined })} placeholder="e.g. 10000" />
+                <div className="space-y-1">
+                  <p className="text-[10px] text-muted-foreground">
+                    Employer SG: {formatCurrency(selfSsi.sg)}/yr · Cap: {formatCurrency(selfSsi.caps.concessionalCap)}/yr · Room: <span className="text-success font-medium">{formatCurrency(selfSsi.annualRoom)}</span>
+                  </p>
+                  {selfSsi.carryForward > 0 && (
+                    <p className="text-[10px] text-success">
+                      Carry-forward available: {formatCurrency(selfSsi.carryForward)} ({selfSsi.caps.label})
+                    </p>
+                  )}
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                    <input type="checkbox"
+                      checked={(selfSalarySacrifice ?? 0) >= selfSsi.maxAvailable - 1 && selfSsi.maxAvailable > 0}
+                      onChange={e => updateTaxSettings({ selfSalarySacrifice: e.target.checked ? selfSsi.maxAvailable : 0 })}
+                      className="rounded border-border" />
+                    Max out {formatCurrency(selfSsi.maxAvailable)}/yr
+                  </label>
+                </div>
               </div>
               <div className="space-y-3 p-3 rounded-lg bg-accent/30">
                 <p className="text-xs font-semibold text-foreground">Partner</p>
@@ -599,6 +651,23 @@ export function SettingsPage() {
                   onChange={v => updateTaxSettings({ partnerAnnualSalary: parseFloat(v) || undefined })} placeholder="e.g. 75000" />
                 <Input label="Salary Sacrifice / yr" type="number" value={partnerSalarySacrifice != null ? String(partnerSalarySacrifice) : ""}
                   onChange={v => updateTaxSettings({ partnerSalarySacrifice: parseFloat(v) || undefined })} placeholder="e.g. 5000" />
+                <div className="space-y-1">
+                  <p className="text-[10px] text-muted-foreground">
+                    Employer SG: {formatCurrency(partnerSsi.sg)}/yr · Cap: {formatCurrency(partnerSsi.caps.concessionalCap)}/yr · Room: <span className="text-success font-medium">{formatCurrency(partnerSsi.annualRoom)}</span>
+                  </p>
+                  {partnerSsi.carryForward > 0 && (
+                    <p className="text-[10px] text-success">
+                      Carry-forward available: {formatCurrency(partnerSsi.carryForward)} ({partnerSsi.caps.label})
+                    </p>
+                  )}
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                    <input type="checkbox"
+                      checked={(partnerSalarySacrifice ?? 0) >= partnerSsi.maxAvailable - 1 && partnerSsi.maxAvailable > 0}
+                      onChange={e => updateTaxSettings({ partnerSalarySacrifice: e.target.checked ? partnerSsi.maxAvailable : 0 })}
+                      className="rounded border-border" />
+                    Max out {formatCurrency(partnerSsi.maxAvailable)}/yr
+                  </label>
+                </div>
               </div>
             </div>
             <div className="mt-3 space-y-3">
