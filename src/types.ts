@@ -94,8 +94,8 @@ export interface Goal {
   deadline?: string;
   color: string;
   icon: string;
-  /** Which partner owns this goal */
-  owner?: Owner;
+  /** Which partner owns this goal (or "joint" for shared goals) */
+  owner?: "self" | "partner" | "joint";
   /** Link to the bank account holding this goal's money */
   accountId?: number;
   /** Goal type for UI behaviour */
@@ -108,6 +108,9 @@ export interface Goal {
   bonusInterestRate?: number;
   /** Date of last goal withdrawal (for bonus interest eligibility tracking) */
   lastWithdrawalDate?: string;
+  /** Text that appears in bank statement rows for this goal (e.g. ANZ "014111-158692844").
+   *  On import, rows containing it auto-route here: debit → contribution, credit → withdrawal. */
+  importKeyword?: string;
   createdAt: string;
 }
 

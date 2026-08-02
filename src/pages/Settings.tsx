@@ -8,7 +8,7 @@ import {
 import { PageHeader } from "../components/Layout";
 import {
   Download, Upload, Trash2, Plus, Settings as SettingsIcon,
-  AlertTriangle, Landmark, Edit2, FolderOpen, Cloud, Unlink,
+  AlertTriangle, Landmark, Edit2, FolderOpen, Cloud, Unlink, Sparkles, Wifi, Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ import type { Account, AccountType } from "../types";
 import { getDirHandle, setDirHandle, removeDirHandle, autoSaveToDir, pickBackupFolder, getImportDirHandle, setImportDirHandle, removeImportDirHandle, pickImportFolder } from "../backup";
 import { getClientId, setClientId, getStoredToken, getLastSyncTime, getConnectedEmail, authenticate, uploadToDrive, downloadFromDrive, downloadFileContent, revokeAccess, getStatementFolderId, setStatementFolderId, removeStatementFolderId, listStatementFiles } from "../googledrive";
 import { getSuperCaps, calculateCarryForward } from "../tax/super";
+import { getAiConfig, setAiConfig, clearAiConfig, testAiConnection, defaultServerUrl } from "../aimatch";
 
 function formatRelativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -45,7 +46,6 @@ function salarySacrificeInfo(
   return {
     caps, sg, currentCC, annualRoom,
     carryForward: Math.max(0, carryForward),
-    maxAvailable: annualRoom + Math.max(0, carryForward),
   };
 }
 
@@ -352,6 +352,35 @@ export function SettingsPage() {
   const [importFolderName, setImportFolderName] = useState<string | null>(null);
   const [importFolderReady, setImportFolderReady] = useState(false);
 
+  // AI config state
+  const [aiServerUrl, setAiServerUrl] = useState(getAiConfig()?.serverUrl ?? defaultServerUrl());
+  const [aiPassword, setAiPassword] = useState(getAiConfig()?.password ?? "");
+  const [aiModel, setAiModel] = useState(getAiConfig()?.model ?? "");
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<string | null>(null);
+  const aiCmd = `OPENCODE_SERVER_PASSWORD=${aiPassword || "<your-password>"} opencode serve --hostname 0.0.0.0 --cors ${window.location.origin} --cors http://localhost:5173`;
+
+  const saveAiConfig = (serverUrl: string, password: string, model: string) => {
+    setAiConfig({ serverUrl: serverUrl || defaultServerUrl(), password: password || undefined, model: model || undefined });
+  };
+
+  const testAi = async () => {
+    setAiTesting(true);
+    setAiTestResult(null);
+    const res = await testAiConnection({ serverUrl: aiServerUrl || defaultServerUrl(), password: aiPassword || undefined });
+    setAiTesting(false);
+    if (res.ok) {
+      setAiTestResult(`Connected — server v${res.version ?? "?"}`);
+      saveAiConfig(aiServerUrl, aiPassword, aiModel);
+    } else {
+      setAiTestResult(`Failed: ${res.error ?? "unknown error"}`);
+    }
+  };
+
+  const copyAiCmd = () => {
+    navigator.clipboard?.writeText(aiCmd).then(() => toast.success("Command copied"));
+  };
+
   useEffect(() => {
     getImportDirHandle().then(h => setImportFolderReady(!!h));
     // Fetch folder name if configured
@@ -629,20 +658,38 @@ export function SettingsPage() {
                   onChange={v => updateTaxSettings({ selfSalarySacrifice: parseFloat(v) || undefined })} placeholder="e.g. 10000" />
                 <div className="space-y-1">
                   <p className="text-[10px] text-muted-foreground">
-                    Employer SG: {formatCurrency(selfSsi.sg)}/yr · Cap: {formatCurrency(selfSsi.caps.concessionalCap)}/yr · Room: <span className="text-success font-medium">{formatCurrency(selfSsi.annualRoom)}</span>
+                    Employer SG: {formatCurrency(selfSsi.sg)}/yr · Cap: {formatCurrency(selfSsi.caps.concessionalCap)}/yr · Room: <span className="text-success font-medium">{formatCurrency(selfSsi.annualRoom)}/yr</span>
                   </p>
                   {selfSsi.carryForward > 0 && (
                     <p className="text-[10px] text-success">
-                      Carry-forward available: {formatCurrency(selfSsi.carryForward)} ({selfSsi.caps.label})
+                      Carry-forward available (one-off): {formatCurrency(selfSsi.carryForward)} ({selfSsi.caps.label})
                     </p>
                   )}
                   <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
                     <input type="checkbox"
-                      checked={(selfSalarySacrifice ?? 0) >= selfSsi.maxAvailable - 1 && selfSsi.maxAvailable > 0}
-                      onChange={e => updateTaxSettings({ selfSalarySacrifice: e.target.checked ? selfSsi.maxAvailable : 0 })}
+                      checked={(selfSalarySacrifice ?? 0) >= selfSsi.annualRoom - 1 && selfSsi.annualRoom > 0}
+                      onChange={e => updateTaxSettings({ selfSalarySacrifice: e.target.checked ? selfSsi.annualRoom : 0 })}
                       className="rounded border-border" />
-                    Max out {formatCurrency(selfSsi.maxAvailable)}/yr
+                    Max out {formatCurrency(selfSsi.annualRoom)}/yr
+                    {selfSsi.annualRoom > 0 && (
+                      <span className="text-[10px] text-muted-foreground">
+                        ≈ {formatCurrency(Math.round(selfSsi.annualRoom / 12))}/mo · {formatCurrency(Math.round(selfSsi.annualRoom / 26))}/fn
+                      </span>
+                    )}
                   </label>
+                  {selfSsi.carryForward > 0 && (
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                      <input type="checkbox"
+                        checked={(selfSalarySacrifice ?? 0) >= selfSsi.annualRoom + selfSsi.carryForward - 1}
+                        onChange={e => updateTaxSettings({
+                          selfSalarySacrifice: e.target.checked
+                            ? selfSsi.annualRoom + selfSsi.carryForward
+                            : selfSsi.annualRoom,
+                        })}
+                        className="rounded border-border" />
+                      Add carry-forward {formatCurrency(selfSsi.carryForward)} this year
+                    </label>
+                  )}
                 </div>
               </div>
               <div className="space-y-3 p-3 rounded-lg bg-accent/30">
@@ -653,20 +700,38 @@ export function SettingsPage() {
                   onChange={v => updateTaxSettings({ partnerSalarySacrifice: parseFloat(v) || undefined })} placeholder="e.g. 5000" />
                 <div className="space-y-1">
                   <p className="text-[10px] text-muted-foreground">
-                    Employer SG: {formatCurrency(partnerSsi.sg)}/yr · Cap: {formatCurrency(partnerSsi.caps.concessionalCap)}/yr · Room: <span className="text-success font-medium">{formatCurrency(partnerSsi.annualRoom)}</span>
+                    Employer SG: {formatCurrency(partnerSsi.sg)}/yr · Cap: {formatCurrency(partnerSsi.caps.concessionalCap)}/yr · Room: <span className="text-success font-medium">{formatCurrency(partnerSsi.annualRoom)}/yr</span>
                   </p>
                   {partnerSsi.carryForward > 0 && (
                     <p className="text-[10px] text-success">
-                      Carry-forward available: {formatCurrency(partnerSsi.carryForward)} ({partnerSsi.caps.label})
+                      Carry-forward available (one-off): {formatCurrency(partnerSsi.carryForward)} ({partnerSsi.caps.label})
                     </p>
                   )}
                   <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
                     <input type="checkbox"
-                      checked={(partnerSalarySacrifice ?? 0) >= partnerSsi.maxAvailable - 1 && partnerSsi.maxAvailable > 0}
-                      onChange={e => updateTaxSettings({ partnerSalarySacrifice: e.target.checked ? partnerSsi.maxAvailable : 0 })}
+                      checked={(partnerSalarySacrifice ?? 0) >= partnerSsi.annualRoom - 1 && partnerSsi.annualRoom > 0}
+                      onChange={e => updateTaxSettings({ partnerSalarySacrifice: e.target.checked ? partnerSsi.annualRoom : 0 })}
                       className="rounded border-border" />
-                    Max out {formatCurrency(partnerSsi.maxAvailable)}/yr
+                    Max out {formatCurrency(partnerSsi.annualRoom)}/yr
+                    {partnerSsi.annualRoom > 0 && (
+                      <span className="text-[10px] text-muted-foreground">
+                        ≈ {formatCurrency(Math.round(partnerSsi.annualRoom / 12))}/mo · {formatCurrency(Math.round(partnerSsi.annualRoom / 26))}/fn
+                      </span>
+                    )}
                   </label>
+                  {partnerSsi.carryForward > 0 && (
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                      <input type="checkbox"
+                        checked={(partnerSalarySacrifice ?? 0) >= partnerSsi.annualRoom + partnerSsi.carryForward - 1}
+                        onChange={e => updateTaxSettings({
+                          partnerSalarySacrifice: e.target.checked
+                            ? partnerSsi.annualRoom + partnerSsi.carryForward
+                            : partnerSsi.annualRoom,
+                        })}
+                        className="rounded border-border" />
+                      Add carry-forward {formatCurrency(partnerSsi.carryForward)} this year
+                    </label>
+                  )}
                 </div>
               </div>
             </div>
@@ -696,12 +761,67 @@ export function SettingsPage() {
           </Card>
         </div>
 
+        {/* AI Statement Matching */}
+        <div>
+          <SectionHeader title="AI Statement Matching" />
+          <Card className="mb-2 p-3 bg-primary/5 border-primary/20">
+            <div className="flex items-start gap-3">
+              <div className="w-7 h-7 rounded-lg bg-primary/15 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <Sparkles size={15} className="text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-muted-foreground">
+                  Connect to your local opencode server so the app can auto-match statements and answer questions about your finances.
+                  Run the command below on your laptop and keep it running while you import.
+                </p>
+                <div className="mt-2 flex items-center gap-1.5">
+                  <code className="flex-1 block text-[10px] font-mono bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground break-all">
+                    {aiCmd}
+                  </code>
+                  <button onClick={copyAiCmd} className="flex-shrink-0 p-1.5 rounded-lg hover:bg-accent text-muted-foreground transition-colors" title="Copy command">
+                    <Copy size={14} />
+                  </button>
+                </div>
+                {window.location.hostname !== "localhost" && (
+                  <p className="mt-1.5 text-[11px] text-primary">
+                    Opened from your phone — server URL auto-detected as <span className="font-mono">{defaultServerUrl()}</span>. Keep the laptop on and on the same Wi-Fi.
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3">
+              <div className="space-y-3 p-3 rounded-lg bg-accent/30">
+                <Input label="Server URL" value={aiServerUrl}
+                  onChange={v => { setAiServerUrl(v); saveAiConfig(v, aiPassword, aiModel); }} placeholder="http://localhost:4096" />
+                <Input label="Password (optional)" type="password" value={aiPassword}
+                  onChange={v => { setAiPassword(v); saveAiConfig(aiServerUrl, v, aiModel); }} placeholder="OPENCODE_SERVER_PASSWORD" />
+                <Input label="Model (optional)" value={aiModel}
+                  onChange={v => { setAiModel(v); saveAiConfig(aiServerUrl, aiPassword, v); }} placeholder="leave blank for default (big-pickle)" />
+              </div>
+              <div className="flex flex-col justify-between gap-3">
+                <div className="space-y-2 text-xs text-muted-foreground">
+                  <p>• <span className="font-medium text-foreground">AI Match</span> in Statements auto-assigns categories/goals on import</p>
+                  <p>• The <span className="font-medium text-foreground">✨ Ask AI</span> button (bottom-right) answers questions and proposes changes</p>
+                  <p>• The AI proposes actions first — you confirm, decline, or edit before anything runs</p>
+                </div>
+                <div className="space-y-2">
+                  <Button label={aiTesting ? "Testing…" : "Test Connection"} onClick={testAi} variant="secondary" size="sm" loading={aiTesting} icon={Wifi} />
+                  {aiTestResult && (
+                    <p className={cn("text-[11px]", aiTestResult.startsWith("Connected") ? "text-success" : "text-destructive")}>
+                      {aiTestResult}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+
         {/* Bank accounts */}
         <div>
           <SectionHeader
             title="Bank Accounts"
-            action={{ label: "+ Add", onPress: () => { setEditAccount(null); setShowAccount(true); } }}
-          />
+            action={{ label: "+ Add", onPress: () => { setEditAccount(null); setShowAccount(true); } }}          />
           <Card className="mb-2 p-3 bg-primary/5 border-primary/20">
             <p className="text-xs text-muted-foreground">
               Track individual and joint accounts. Link income, expenses, and recurring bills to the account they use.

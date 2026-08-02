@@ -75,10 +75,11 @@ export function Button({
 }
 
 export function Input({
-  label, value, onChange, placeholder, type = "text", prefix, multiline, className, autoFocus,
+  label, value, onChange, placeholder, type = "text", prefix, multiline, className, autoFocus, sublabel,
 }: {
   label?: string; value: string; onChange: (v: string) => void; placeholder?: string;
   type?: string; prefix?: string; multiline?: boolean; className?: string; autoFocus?: boolean;
+  sublabel?: string;
 }) {
   const inputClass = cn(
     "w-full bg-background border border-input rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors",
@@ -114,6 +115,7 @@ export function Input({
             className={inputClass}
           />
         )}
+        {sublabel && <p className="text-[11px] text-muted-foreground">{sublabel}</p>}
       </div>
     </div>
   );

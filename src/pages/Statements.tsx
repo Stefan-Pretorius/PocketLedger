@@ -1,17 +1,19 @@
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useStore, type ImportedTransaction } from "../store";
-import type { ImportedStatement } from "../types";
+import type { ImportedStatement, BankMappingRule, IncomeSource } from "../types";
 import { formatCurrency, formatDate, getBudgetDateRange } from "../utils";
 import { Colors } from "../theme";
 import { Card, Button, Input, Modal, SectionHeader, ColorDot, ColorPicker } from "../components/ui";
 import { PageHeader } from "../components/Layout";
+import { useAiChat, type AiAssignment } from "../useAiChat";
+import { getAiConfig } from "../aimatch";
 
 import {
   Upload, FileText, Check, AlertTriangle, Receipt, Download, Trash2,
   CheckCircle2, XCircle, MinusCircle, Star, Plus, Target, Landmark, FolderPlus, FilePlus, ChevronRight,
-  Cloud, RefreshCw,
+  Cloud, RefreshCw, Sparkles, Send, Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -689,9 +691,80 @@ function RuleForm({
   );
 }
 
+// ─── AI Statement Matching helpers ────────────────────────────────────────────
+
+function buildMatchSystemPrompt(categories: { id: number; name: string; color: string }[], goals: { id: number; name: string; color: string }[], accounts: { id: number; name: string }[], holdings: { id: number; symbol: string; name: string }[], bankRules: BankMappingRule[], incomeSources: IncomeSource[]): string {
+  const catList = categories.map(c => `${c.id}: ${c.name}`).join("\n");
+  const goalList = goals.map(g => `${g.id}: ${g.name}`).join("\n");
+  const accList = accounts.map(a => `${a.id}: ${a.name}`).join("\n");
+  const holdList = holdings.map(h => `${h.id}: ${h.symbol} (${h.name})`).join("\n");
+  const ruleList = bankRules.length
+    ? bankRules.map((r, i) => `${i + 1}. "${r.keyword}" → ${r.route === "category" ? "category" : r.route === "goal" ? "goal" : r.route === "goalWithdrawal" ? "goal withdrawal" : r.route === "holding" ? "holding" : r.route === "income" ? "income" : r.route === "householdTransfer" ? "household transfer" : "skip"}${r.route === "category" ? ` (category id ${r.categoryId})` : r.route === "goal" || r.route === "goalWithdrawal" ? ` (goal id ${r.goalId})` : r.route === "holding" ? ` (holding id ${r.holdingId})` : r.route === "income" ? ` (${r.incomeName})` : ""}`).join("\n")
+    : "None";
+  const incList = incomeSources.map(i => i.name).join("\n");
+  return `You are an expert bookkeeper helping import a bank statement into a personal finance tracker.
+
+Available budget categories (id: name):
+${catList || "None"}
+
+Available savings goals (id: name):
+${goalList || "None"}
+
+Available accounts (id: name):
+${accList || "None"}
+
+Available holdings (id: symbol/name):
+${holdList || "None"}
+
+Known income sources:
+${incList || "None"}
+
+Existing auto-match rules (from past imports):
+${ruleList}
+
+A list of unassigned transactions is given as JSON: [{"index":0,"date":"...","description":"...","amount":42.50,"credit":false}]
+
+For each transaction you must classify it. Respond with ONLY valid JSON in one of two shapes:
+1. To ask a clarifying question: {"type":"question","text":"..."} — ask at most ONE question at a time, about the transaction(s) you are unsure of.
+2. To assign rows: {"type":"assignments","rows":[{"index":0,"action":"category","categoryId":1}, ...]}
+
+Valid actions:
+- "category" with categoryId (exact id from the list) — normal spending
+- "goal" with goalId — money moved into a savings goal
+- "goalWithdrawal" with goalId — money taken out of a goal to be spent (e.g. ANZ Plus withdrawal) — never guess this unless the description clearly indicates a goal withdrawal or the amount matches a goal contribution that is being reversed
+- "income" with name (one of the known income sources, or a sensible new source name like "Salary") — credits such as salary, transfers from overseas, refunds, interest
+- "transfer" with accountId — money moving between your own accounts (internal transfer, e.g. to/from Flex Saver, Joint)
+- "holding" with holdingId — money used to buy investments (e.g. ETFs, crypto)
+- "householdTransfer" — transfer to/from the household (wife) that is not spending
+- "skip" — unclassifiable, leave blank
+
+Rules to follow:
+- Assign EVERY index in the list. Prefer "skip" over guessing wrong.
+- Credits: salary → income; bank fees refund → income; interest → income; transfers between own accounts → transfer; else ask or skip.
+- Debits: groceries/café/utilities/etc → category; transfers to your own accounts → transfer; purchases of investments → holding; contributions to goals → goal.
+- Reuse existing auto-match rules when the description matches one.
+- Match the goal/category/account ids exactly as provided — do not invent ids.`;
+}
+
+function buildMatchRowsPrompt(rows: ImportedTransaction[]): string {
+  const list = rows.map((r, i) => JSON.stringify({ index: i, date: r.date, description: r.description, amount: r.amount, credit: r.isCredit }));
+  return `Here are the unassigned transactions. Assign each one:\n${list.join(",\n")}`;
+}
+
+const AI_ACTIONS: { value: AiAssignment["action"]; label: string }[] = [
+  { value: "category", label: "Category" },
+  { value: "goal", label: "Goal (contribution)" },
+  { value: "goalWithdrawal", label: "Goal withdrawal" },
+  { value: "income", label: "Income" },
+  { value: "transfer", label: "Transfer (own accounts)" },
+  { value: "holding", label: "Investment / Holding" },
+  { value: "householdTransfer", label: "Household transfer" },
+  { value: "skip", label: "Skip" },
+];
+
 // ─── Import Review ────────────────────────────────────────────────────────────
 
-function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categories, goals, accounts, accountId, onAccountChange, onCreateGoal, onCreateCategory, onCreateRule, holdings, detectedAccountInfo, endingBalance, onEndingBalanceChange, currentAccountBalance }: {
+function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categories, goals, accounts, accountId, onAccountChange, onCreateGoal, onCreateCategory, onCreateRule, holdings, bankRules, incomeSources, detectedAccountInfo, endingBalance, onEndingBalanceChange, currentAccountBalance }: {
   fileName: string;
   rows: ImportedTransaction[];
   onChange: (updated: ImportedTransaction[]) => void;
@@ -706,6 +779,8 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
   onCreateCategory?: () => void;
   onCreateRule?: (row: ImportedTransaction) => void;
   holdings?: { id: number; symbol: string; name: string }[];
+  bankRules: BankMappingRule[];
+  incomeSources: IncomeSource[];
   endingBalance?: string;
   onEndingBalanceChange?: (v: string) => void;
   currentAccountBalance?: number;
@@ -765,6 +840,75 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
       return;
     }
     onChange(rows.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  };
+
+  // ─── AI Statement Matching ────────────────────────────────────────────────────
+  const unassigned = rows.filter(r => !r.skip && !r.isHouseholdTransfer && r.categoryId === null && r.goalId === null && r.goalWithdrawalId == null && r.holdingId == null && r.incomeSourceName == null && r.transferToAccountId == null);
+  const matchSystemPrompt = useMemo(
+    () => buildMatchSystemPrompt(categories, goals, accounts, holdings ?? [], bankRules, incomeSources),
+    [categories, goals, accounts, holdings, bankRules, incomeSources],
+  );
+  const chat = useAiChat(matchSystemPrompt);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiAnswer, setAiAnswer] = useState("");
+  const [drafts, setDrafts] = useState<AiAssignment[] | null>(null);
+  const [draftEnabled, setDraftEnabled] = useState<Record<number, boolean>>({});
+
+  useEffect(() => {
+    const last = chat.messages[chat.messages.length - 1];
+    if (last && last.role === "ai" && last.kind === "assignments" && last.assignments) {
+      setDrafts(last.assignments);
+      const en: Record<number, boolean> = {};
+      last.assignments.forEach(a => { en[a.index] = true; });
+      setDraftEnabled(en);
+    }
+  }, [chat.messages]);
+
+  const startAiMatch = () => {
+    if (unassigned.length === 0) { toast.info("No unassigned transactions to match."); return; }
+    setAiOpen(true);
+    setDrafts(null);
+    chat.clear();
+    chat.send(buildMatchRowsPrompt(unassigned));
+  };
+
+  const closeAiMatch = () => {
+    setAiOpen(false);
+    chat.clear();
+    setDrafts(null);
+    setAiAnswer("");
+  };
+
+  const updateDraft = (idx: number, patch: Partial<AiAssignment>) => {
+    setDrafts(prev => prev?.map(d => d.index === idx ? { ...d, ...patch } : d) ?? null);
+  };
+
+  const applyAiDrafts = () => {
+    if (!drafts) return;
+    let applied = 0;
+    const next = rows.map((r, idx) => {
+      const d = drafts.find(x => x.index === idx && draftEnabled[x.index]);
+      if (!d) return r;
+      const patch: Partial<ImportedTransaction> = {};
+      switch (d.action) {
+        case "category": if (d.categoryId != null) patch.categoryId = d.categoryId; break;
+        case "goal": if (d.goalId != null) patch.goalId = d.goalId; break;
+        case "goalWithdrawal": if (d.goalId != null) patch.goalWithdrawalId = d.goalId; break;
+        case "income": if (d.name) patch.incomeSourceName = d.name; break;
+        case "transfer": if (d.accountId != null) { patch.transferToAccountId = d.accountId; patch.skip = false; } break;
+        case "holding": if (d.holdingId != null) patch.holdingId = d.holdingId; break;
+        case "householdTransfer": { patch.isHouseholdTransfer = true; patch.skip = false; } break;
+        case "skip": patch.skip = true; break;
+      }
+      if (Object.keys(patch).length === 0) return r;
+      applied++;
+      return { ...r, ...patch, autoMatched: true };
+    });
+    onChange(next);
+    setAiOpen(false);
+    setDrafts(null);
+    setAiAnswer("");
+    toast.success(`Applied ${applied} AI match${applied !== 1 ? "es" : ""}`);
   };
 
   return (
@@ -1046,11 +1190,169 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
 
       <div className="flex items-center justify-between pt-1 border-t border-border">
         <span className="text-xs text-muted-foreground">{toImport} will be imported · assignments auto-saved as rules</span>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {unassigned.length > 0 && (
+            <Button
+              label={chat.busy ? "AI…" : "AI Match"}
+              onClick={startAiMatch}
+              variant="secondary"
+              size="sm"
+              icon={chat.busy ? Loader2 : Sparkles}
+              loading={chat.busy}
+            />
+          )}
           <Button label="Cancel" onClick={onCancel} variant="secondary" size="sm" />
           <Button label={`Import ${toImport}`} onClick={onConfirm} variant="primary" size="sm" icon={Check} disabled={toImport === 0} />
         </div>
       </div>
+
+      {/* AI Match dialog */}
+      <Modal visible={aiOpen} onClose={closeAiMatch} title={`AI Match — ${unassigned.length} unassigned`} maxWidth="lg">
+        {chat.error && (
+          <div className="mb-2 p-3 rounded-lg bg-destructive/10 text-destructive text-xs flex items-start gap-2">
+            <AlertTriangle size={13} className="flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium">{chat.error}</p>
+              <p className="mt-1 text-muted-foreground">Run <span className="font-mono">opencode serve --cors http://localhost:5173</span>, then open Settings → AI Statement Matching to configure.</p>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-2 max-h-44 overflow-y-auto mb-3 pr-1">
+          {chat.messages.map((m, i) => (
+            <div key={i} className={cn("flex", m.role === "user" ? "justify-end" : "justify-start")}>
+              <div className={cn(
+                "max-w-[85%] px-3 py-2 rounded-xl text-xs whitespace-pre-wrap",
+                m.role === "user"
+                  ? "bg-primary text-primary-foreground rounded-br-sm"
+                  : "bg-accent rounded-bl-sm text-foreground",
+              )}>
+                {m.text}
+              </div>
+            </div>
+          ))}
+          {chat.busy && (
+            <div className="flex justify-start">
+              <div className="bg-accent px-3 py-2 rounded-xl rounded-bl-sm text-xs text-muted-foreground flex items-center gap-1.5">
+                <Loader2 size={12} className="animate-spin" /> thinking…
+              </div>
+            </div>
+          )}
+        </div>
+
+        {drafts && (
+          <div className="space-y-1.5 mb-3">
+            <p className="text-xs font-medium text-muted-foreground">Review {drafts.length} proposed match{drafts.length !== 1 ? "es" : ""} — confirm, decline, or edit each:</p>
+            {drafts.map(d => {
+              const row = rows[d.index];
+              if (!row) return null;
+              return (
+                <div key={d.index} className="flex items-center gap-2 rounded-lg border border-border p-2 bg-card">
+                  <input
+                    type="checkbox"
+                    checked={!!draftEnabled[d.index]}
+                    onChange={e => setDraftEnabled(prev => ({ ...prev, [d.index]: e.target.checked }))}
+                    className="accent-primary flex-shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] text-muted-foreground truncate">{row.description}</p>
+                    <p className="text-[10px] text-muted-foreground">{formatCurrency(row.amount)} · {row.date}</p>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                      <select
+                        value={d.action}
+                        onChange={e => {
+                          const action = e.target.value as AiAssignment["action"];
+                          const patch: Partial<AiAssignment> = { action };
+                          if (action === "category") patch.categoryId = undefined;
+                          if (action === "goal" || action === "goalWithdrawal") patch.goalId = undefined;
+                          if (action === "income") patch.name = undefined;
+                          if (action === "transfer") patch.accountId = undefined;
+                          if (action === "holding") patch.holdingId = undefined;
+                          updateDraft(d.index, patch);
+                        }}
+                        className="text-[11px] bg-accent rounded-md px-1.5 py-1 border border-border outline-none"
+                      >
+                        {AI_ACTIONS.map(a => <option key={a.value} value={a.value}>{a.label}</option>)}
+                      </select>
+                      {d.action === "category" && (
+                        <select
+                          value={d.categoryId ?? ""}
+                          onChange={e => updateDraft(d.index, { categoryId: e.target.value ? Number(e.target.value) : undefined })}
+                          className="text-[11px] bg-accent rounded-md px-1.5 py-1 border border-border outline-none max-w-40"
+                        >
+                          <option value="">Pick category…</option>
+                          {[...categories].sort((a, b) => a.name.localeCompare(b.name)).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                      )}
+                      {(d.action === "goal" || d.action === "goalWithdrawal") && (
+                        <select
+                          value={d.goalId ?? ""}
+                          onChange={e => updateDraft(d.index, { goalId: e.target.value ? Number(e.target.value) : undefined })}
+                          className="text-[11px] bg-accent rounded-md px-1.5 py-1 border border-border outline-none max-w-40"
+                        >
+                          <option value="">Pick goal…</option>
+                          {[...goals].sort((a, b) => a.name.localeCompare(b.name)).map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                        </select>
+                      )}
+                      {d.action === "income" && (
+                        <input
+                          value={d.name ?? ""}
+                          onChange={e => updateDraft(d.index, { name: e.target.value })}
+                          placeholder="Income source name"
+                          className="text-[11px] bg-accent rounded-md px-1.5 py-1 border border-border outline-none flex-1 min-w-32"
+                        />
+                      )}
+                      {d.action === "transfer" && (
+                        <select
+                          value={d.accountId ?? ""}
+                          onChange={e => updateDraft(d.index, { accountId: e.target.value ? Number(e.target.value) : undefined })}
+                          className="text-[11px] bg-accent rounded-md px-1.5 py-1 border border-border outline-none max-w-40"
+                        >
+                          <option value="">Pick account…</option>
+                          {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                        </select>
+                      )}
+                      {d.action === "holding" && holdings && holdings.length > 0 && (
+                        <select
+                          value={d.holdingId ?? ""}
+                          onChange={e => updateDraft(d.index, { holdingId: e.target.value ? Number(e.target.value) : undefined })}
+                          className="text-[11px] bg-accent rounded-md px-1.5 py-1 border border-border outline-none max-w-40"
+                        >
+                          <option value="">Pick holding…</option>
+                          {holdings.map(h => <option key={h.id} value={h.id}>{h.symbol} — {h.name}</option>)}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="flex gap-2 pt-2">
+              <Button label="Cancel" onClick={() => setDrafts(null)} variant="secondary" size="sm" />
+              <Button label={`Apply ${drafts.filter(d => draftEnabled[d.index]).length} match${drafts.filter(d => draftEnabled[d.index]).length !== 1 ? "es" : ""}`} onClick={applyAiDrafts} variant="primary" size="sm" icon={Check} />
+            </div>
+          </div>
+        )}
+
+        {!drafts && (
+          <form
+            className="flex gap-2 items-center"
+            onSubmit={e => {
+              e.preventDefault();
+              if (!aiAnswer.trim() || chat.busy) return;
+              chat.send(aiAnswer.trim());
+              setAiAnswer("");
+            }}
+          >
+            <Input
+              value={aiAnswer}
+              onChange={setAiAnswer}
+              placeholder={chat.messages.length === 0 ? "Ask the AI to classify these transactions…" : "Answer the question or give more info…"}
+            />
+            <Button label="" onClick={() => {}} variant="primary" icon={Send} disabled={chat.busy || !aiAnswer.trim()} />
+          </form>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -1061,6 +1363,7 @@ export function StatementsPage() {
   const {
     budgets, expenses, activeBudgetId, categories, goals, holdings,
     previewImport, commitImport, deleteImportedStatement, upsertBankRule, importedStatements, accounts,
+    bankRules, incomeSources,
   } = useStore();
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1840,6 +2143,8 @@ export function StatementsPage() {
                 holdings={holdings}
                 accountId={importAccountId}
                 onAccountChange={setImportAccountId}
+                bankRules={bankRules}
+                incomeSources={incomeSources}
                 endingBalance={importEndingBalance}
                 onEndingBalanceChange={setImportEndingBalance}
                 currentAccountBalance={importAccountId != null ? accounts.find(a => a.id === importAccountId)?.balance : undefined}

@@ -4,6 +4,7 @@ import {
   LayoutDashboard, Wallet, Receipt, Target, FileText, Settings, TrendingUp, PieChart, BarChart3, GitCompare, Calculator,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AiPanel } from "./AiPanel";
 
 const navItems = [
   { label: "Dashboard", icon: LayoutDashboard, href: "/" },
@@ -82,6 +83,9 @@ export function Layout({ children }: { children: ReactNode }) {
           <BottomNavItem key={item.href} {...item} />
         ))}
       </nav>
+
+      {/* Global Ask AI */}
+      <AiPanel />
     </div>
   );
 }

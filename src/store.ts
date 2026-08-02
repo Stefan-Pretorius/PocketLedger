@@ -854,6 +854,17 @@ export const useStore = create<AppState>()((set, get) => ({
         }
 
         const desc = tx.description.toLowerCase();
+
+        // Goal statement-keyword matching (e.g. ANZ goal account "014111-158692844").
+        // Highest priority: debit → contribution, credit → withdrawal. No bank rule needed.
+        const goalByKeyword = goals.find(g => g.importKeyword && desc.includes(g.importKeyword.toLowerCase()));
+        if (goalByKeyword) {
+          if (tx.isCredit) {
+            return { ...tx, categoryId: null, goalId: null, goalWithdrawalId: goalByKeyword.id, skip: false, autoMatched: true };
+          }
+          return { ...tx, categoryId: null, goalId: goalByKeyword.id, goalWithdrawalId: undefined, skip: false, autoMatched: true };
+        }
+
         let matchedCategoryId: number | null = null;
         let matchedGoalId: number | null = null;
         let matchedGoalWithdrawalId: number | undefined;

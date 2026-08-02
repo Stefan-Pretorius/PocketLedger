@@ -7,7 +7,7 @@ import {
   ColorPicker, ColorDot, Confirm,
 } from "../components/ui";
 import { PageHeader } from "../components/Layout";
-import { Plus, Trash2, Edit2, Target, TrendingUp, LayoutGrid, List, Banknote, Repeat } from "lucide-react";
+import { Plus, Trash2, Edit2, Target, TrendingUp, LayoutGrid, List, Banknote, Repeat, Hash, Users } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Goal } from "../types";
@@ -25,12 +25,13 @@ function GoalModal({
   const [current, setCurrent] = useState(String(initial?.currentAmount ?? "0"));
   const [deadline, setDeadline] = useState(initial?.deadline ?? "");
   const [color, setColor] = useState(initial?.color ?? Colors.categoryColors[0]);
+  const [keyword, setKeyword] = useState(initial?.importKeyword ?? "");
   const [goalType, setGoalType] = useState<"anzPlus" | "manual" | "investment">(initial?.goalType ?? "manual");
   const [accountId, setAccountId] = useState<number | undefined>(initial?.accountId);
   const [bonusRate, setBonusRate] = useState(initial?.bonusInterestRate != null ? String(initial.bonusInterestRate) : "");
   const [autoAmt, setAutoAmt] = useState(initial?.autoContributionAmount != null ? String(initial.autoContributionAmount) : "");
   const [autoFreq, setAutoFreq] = useState<"weekly" | "fortnightly" | "monthly">(initial?.autoContributionFrequency ?? "monthly");
-  const [owner, setOwner] = useState<"self" | "partner">(initial?.owner ?? "self");
+  const [owner, setOwner] = useState<"self" | "partner" | "joint">(initial?.owner ?? "self");
 
   const flexSaverAccounts = accounts.filter(a => a.accountSubType === "flexSaver" || a.accountSubType === "growthSaver");
 
@@ -49,6 +50,7 @@ function GoalModal({
       goalType, accountId: goalType === "anzPlus" ? accountId : undefined,
       bonusInterestRate, autoContributionAmount,
       autoContributionFrequency: autoContributionAmount ? autoFreq : undefined,
+      importKeyword: keyword.trim() || undefined,
       owner,
     };
     if (initial) {
@@ -68,6 +70,9 @@ function GoalModal({
         <Input label="Description (optional)" value={desc} onChange={setDesc} placeholder="What is this goal for?" multiline />
         <Input label="Target Amount (optional)" value={target} onChange={setTarget} type="number" prefix="$" placeholder="No target" />
         <Input label="Current Amount" value={current} onChange={setCurrent} type="number" prefix="$" placeholder="0.00" />
+        <Input label="Statement Keyword" value={keyword} onChange={setKeyword}
+          placeholder="e.g. #784750"
+          sublabel={'The goal reference shown on transfers in your bank statement (ANZ Plus: the # number next to the goal account). Rows containing it auto-import — debit = contribution, credit = withdrawal. Add the account too, e.g. "014111-158692844 #784750", to be more specific.'} />
         <Input label="Deadline (optional)" value={deadline} onChange={setDeadline} type="date" />
         <div>
           <label className="text-sm font-medium text-muted-foreground block mb-2">Color</label>
@@ -135,7 +140,7 @@ function GoalModal({
         <div>
           <label className="text-sm font-medium text-muted-foreground block mb-2">Owner</label>
           <div className="flex gap-1.5">
-            {(["self", "partner"] as const).map(o => (
+            {(["self", "partner", "joint"] as const).map(o => (
               <button key={o} onClick={() => setOwner(o)}
                 className={cn(
                   "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
@@ -143,7 +148,7 @@ function GoalModal({
                     ? "bg-primary text-primary-foreground border-primary"
                     : "bg-muted text-muted-foreground border-border hover:border-primary/40"
                 )}>
-                {o === "self" ? "Self" : "Partner"}
+                {o === "self" ? "Self" : o === "partner" ? "Partner" : "Joint"}
               </button>
             ))}
           </div>
@@ -393,6 +398,16 @@ export function GoalsPage() {
                                   </span>
                                 )}
                               </div>
+                            )}
+                            {g.importKeyword && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-primary/10 text-primary mt-1">
+                                <Hash size={8} /> auto-import "{g.importKeyword}"
+                              </span>
+                            )}
+                            {g.owner === "joint" && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-600 dark:text-green-400 mt-1">
+                                <Users size={8} /> Joint
+                              </span>
                             )}
                           </div>
                         </div>
