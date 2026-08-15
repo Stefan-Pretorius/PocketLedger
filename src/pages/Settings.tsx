@@ -3,7 +3,7 @@ import { useStore } from "../store";
 import { formatCurrency } from "../utils";
 import { Colors } from "../theme";
 import {
-  Card, Button, Input, Modal, EmptyState, SectionHeader, Confirm,
+  Card, Button, Input, Modal, EmptyState, SectionHeader, Confirm, SearchInput,
 } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import {
@@ -16,6 +16,8 @@ import type { Account, AccountType } from "../types";
 import { getDirHandle, setDirHandle, removeDirHandle, autoSaveToDir, pickBackupFolder, getImportDirHandle, setImportDirHandle, removeImportDirHandle, pickImportFolder } from "../backup";
 import { getClientId, setClientId, getStoredToken, getLastSyncTime, getConnectedEmail, authenticate, uploadToDrive, downloadFromDrive, downloadFileContent, revokeAccess, getStatementFolderId, setStatementFolderId, removeStatementFolderId, listStatementFiles } from "../googledrive";
 import { getSuperCaps, calculateCarryForward } from "../tax/super";
+import { calculatePayg, getTaxYearRates, calculateIncomeTax, calculateLITO, calculateMedicareLevy, getMarginalRate, calculateDiv293, MEDICARE_THRESHOLDS_2026_27 } from "../tax";
+import type { PaygPeriodBreakdown } from "../tax";
 import { getAiConfig, setAiConfig, clearAiConfig, testAiConnection, defaultServerUrl } from "../aimatch";
 
 function formatRelativeTime(ts: number): string {
@@ -32,10 +34,11 @@ function salarySacrificeInfo(
   superBalance: number | undefined,
   unusedConcessionalCaps: number[] | undefined,
   fyLabel: string | undefined,
+  bonusTotal = 0,
 ) {
   const caps = getSuperCaps(fyLabel ?? "2026-27");
   const salary = annualSalary ?? 0;
-  const sg = Math.min(salary * caps.sgRate, caps.maxSgBase * caps.sgRate);
+  const sg = Math.min((salary + bonusTotal) * caps.sgRate, caps.maxSgBase * caps.sgRate);
   const currentCC = sg + (currentSacrifice ?? 0);
   const annualRoom = Math.max(0, caps.concessionalCap - currentCC);
   const carryForward = calculateCarryForward(
@@ -47,6 +50,249 @@ function salarySacrificeInfo(
     caps, sg, currentCC, annualRoom,
     carryForward: Math.max(0, carryForward),
   };
+}
+
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function IncentiveInput() {
+  const selfIncentive = useStore(s => s.selfIncentive);
+  const selfIncentiveMonths = useStore(s => s.selfIncentiveMonths);
+  const updateTaxSettings = useStore(s => s.updateTaxSettings);
+  const taxYearLabel = useStore(s => s.taxYearLabel);
+  const months = selfIncentiveMonths ?? [];
+
+  const toggle = (m: number) => {
+    const next = months.includes(m) ? months.filter(x => x !== m) : [...months, m];
+    updateTaxSettings({ selfIncentiveMonths: next.sort((a, b) => a - b) });
+  };
+
+  return (
+    <div>
+      <Input label="Incentive / Bonus per payment" type="number"
+        value={selfIncentive != null ? String(selfIncentive) : ""}
+        onChange={v => updateTaxSettings({ selfIncentive: parseFloat(v) || undefined })}
+        placeholder="e.g. 12000"
+        sublabel="Normally paid every 6 months. Add only the payments you expect this FY." />
+      <div className="flex flex-wrap gap-1 mt-1.5">
+        {MONTH_LABELS.map((label, i) => {
+          const m = i + 1;
+          const on = months.includes(m);
+          return (
+            <button key={m} type="button" onClick={() => toggle(m)} title={label}
+              className={cn("px-1.5 py-0.5 text-[10px] rounded-md border transition-colors",
+                on ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border")}>
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-muted-foreground mt-1">
+        {months.length > 0
+          ? `Expected ${months.length} payment${months.length > 1 ? "s" : ""}: ${months.map(m => MONTH_LABELS[m - 1]).join(", ")} (${taxYearLabel ?? "2026-27"})`
+          : `Select estimated payment month(s) this FY (${taxYearLabel ?? "2026-27"}).`}
+      </p>
+    </div>
+  );
+}
+
+function TakeHomeSummary() {
+  const selfAnnualSalary = useStore(s => s.selfAnnualSalary);
+  const partnerAnnualSalary = useStore(s => s.partnerAnnualSalary);
+  const selfSalarySacrifice = useStore(s => s.selfSalarySacrifice);
+  const partnerSalarySacrifice = useStore(s => s.partnerSalarySacrifice);
+  const selfIncentive = useStore(s => s.selfIncentive);
+  const selfIncentiveMonths = useStore(s => s.selfIncentiveMonths);
+  const taxYearLabel = useStore(s => s.taxYearLabel);
+  const medicareExempt = useStore(s => s.medicareExempt);
+
+  const rates = getTaxYearRates(taxYearLabel ?? "2026-27");
+  const fyLabel = rates.label;
+  const caps = getSuperCaps(fyLabel);
+
+  const incentiveMonths = selfIncentiveMonths ?? [];
+  const incentiveCount = incentiveMonths.length;
+  const incentivesTotal = (selfIncentive ?? 0) * incentiveCount;
+
+  const paygOpts = (salarySacrifice?: number) => ({ salarySacrifice, medicareExempt, maxSgBase: caps.maxSgBase });
+
+  // Regular take-home: salary only
+  const self = selfAnnualSalary
+    ? calculatePayg(selfAnnualSalary, rates, paygOpts(selfSalarySacrifice))
+    : null;
+  const partner = partnerAnnualSalary
+    ? calculatePayg(partnerAnnualSalary, rates, paygOpts(partnerSalarySacrifice))
+    : null;
+
+  // With-incentive annual (tax + SG attributable to incentives = difference vs salary-only)
+  const selfWithIncentive = self && incentivesTotal > 0
+    ? calculatePayg(selfAnnualSalary! + incentivesTotal, rates, paygOpts(selfSalarySacrifice))
+    : null;
+  const incentiveTax = selfWithIncentive && self
+    ? selfWithIncentive.withholding.annual - self.withholding.annual
+    : 0;
+  const incentiveSg = selfWithIncentive && self
+    ? selfWithIncentive.superGuarantee - self.superGuarantee
+    : 0;
+  const incentiveNetTotal = incentivesTotal - incentiveTax;
+  const incentiveNetPerPayment = incentiveCount > 0 ? incentiveNetTotal / incentiveCount : 0;
+
+  const monthlyNet = (self?.monthlyNet ?? 0) + (partner?.monthlyNet ?? 0);
+  const annualNet = (selfWithIncentive?.annualNet ?? self?.annualNet ?? 0) + (partner?.annualNet ?? 0);
+
+  const rows: { label: string; self: number | null; partner: number | null; combined: number }[] = [
+    { label: "Weekly", self: self?.weeklyNet ?? null, partner: partner?.weeklyNet ?? null, combined: (self?.weeklyNet ?? 0) + (partner?.weeklyNet ?? 0) },
+    { label: "Fortnightly", self: self?.fortnightlyNet ?? null, partner: partner?.fortnightlyNet ?? null, combined: (self?.fortnightlyNet ?? 0) + (partner?.fortnightlyNet ?? 0) },
+    { label: "Monthly", self: self?.monthlyNet ?? null, partner: partner?.monthlyNet ?? null, combined: monthlyNet },
+    { label: "Annual", self: selfWithIncentive?.annualNet ?? self?.annualNet ?? null, partner: partner?.annualNet ?? null, combined: annualNet },
+  ];
+
+  const annualBreakdown = (p: PaygPeriodBreakdown | null) => {
+    if (!p) return null;
+    const taxable = p.taxableIncome;
+    const incomeTax = calculateIncomeTax(taxable, rates);
+    const medicare = medicareExempt ? 0 : calculateMedicareLevy(taxable, rates.medicareLevyRate, MEDICARE_THRESHOLDS_2026_27);
+    const lito = calculateLITO(taxable, rates);
+    const wato = rates.watoMax && taxable > 0 ? rates.watoMax : 0;
+    const withheld = p.withholding.annual;
+    return {
+      taxable,
+      incomeTax,
+      medicare,
+      credit: lito + wato,
+      withheld,
+      net: p.annualNet,
+      marginalRate: getMarginalRate(taxable, rates),
+      effectiveRate: p.annualGross > 0 ? withheld / p.annualGross : 0,
+    };
+  };
+  const selfBreakdown = annualBreakdown(selfWithIncentive ?? self);
+  const partnerBreakdown = annualBreakdown(partner);
+
+  const sacrificeCost = (salary: number | undefined, sacrifice: number | undefined, annualNet: number | null) => {
+    if (!salary || salary <= 0) return null;
+    const amt = sacrifice ?? 0;
+    if (amt <= 0) return null;
+    const noSac = calculatePayg(salary, rates, paygOpts(0));
+    const cost = noSac.annualNet - (annualNet ?? noSac.annualNet);
+    const sg = Math.min(salary, caps.maxSgBase) * caps.sgRate;
+    const div293 = calculateDiv293(salary + amt, amt + sg);
+    return { sacrifice: amt, cost, taxSaving: amt - cost, div293 };
+  };
+  const selfSac = sacrificeCost(selfAnnualSalary, selfSalarySacrifice, self?.annualNet ?? null);
+  const partnerSac = sacrificeCost(partnerAnnualSalary, partnerSalarySacrifice, partner?.annualNet ?? null);
+
+  const detailRows = (selfBreakdown || partnerBreakdown) ? [
+    { label: "Taxable income", self: selfBreakdown?.taxable ?? null, partner: partnerBreakdown?.taxable ?? null, combined: (selfBreakdown?.taxable ?? 0) + (partnerBreakdown?.taxable ?? 0), fmt: (v: number) => formatCurrency(v), bold: false, dim: false },
+    { label: "Income tax", self: selfBreakdown?.incomeTax ?? null, partner: partnerBreakdown?.incomeTax ?? null, combined: (selfBreakdown?.incomeTax ?? 0) + (partnerBreakdown?.incomeTax ?? 0), fmt: (v: number) => formatCurrency(v), bold: false, dim: false },
+    { label: "Medicare levy", self: selfBreakdown?.medicare ?? null, partner: partnerBreakdown?.medicare ?? null, combined: (selfBreakdown?.medicare ?? 0) + (partnerBreakdown?.medicare ?? 0), fmt: (v: number) => formatCurrency(v), bold: false, dim: false },
+    { label: "LITO/WATO credit", self: selfBreakdown?.credit ?? null, partner: partnerBreakdown?.credit ?? null, combined: (selfBreakdown?.credit ?? 0) + (partnerBreakdown?.credit ?? 0), fmt: (v: number) => `-${formatCurrency(v)}`, bold: false, dim: false },
+    { label: "Total withheld", self: selfBreakdown?.withheld ?? null, partner: partnerBreakdown?.withheld ?? null, combined: (selfBreakdown?.withheld ?? 0) + (partnerBreakdown?.withheld ?? 0), fmt: (v: number) => formatCurrency(v), bold: false, dim: false },
+    { label: "Net take-home", self: selfBreakdown?.net ?? null, partner: partnerBreakdown?.net ?? null, combined: (selfBreakdown?.net ?? 0) + (partnerBreakdown?.net ?? 0), fmt: (v: number) => formatCurrency(v), bold: true, dim: false },
+    { label: "Marginal rate", self: selfBreakdown?.marginalRate ?? null, partner: partnerBreakdown?.marginalRate ?? null, combined: null, fmt: (v: number) => `${Math.round(v * 100)}%`, bold: false, dim: true },
+    { label: "Effective rate", self: selfBreakdown?.effectiveRate ?? null, partner: partnerBreakdown?.effectiveRate ?? null, combined: null, fmt: (v: number) => `${(v * 100).toFixed(1)}%`, bold: false, dim: true },
+  ] : [];
+
+  return (
+    <div className="rounded-lg border border-border bg-background p-3">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-foreground">Take-home pay (PAYG withholding, {fyLabel})</p>
+        <p className="text-[10px] text-muted-foreground">ATO formula estimate</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[10px] text-muted-foreground border-b border-border">
+              <th className="py-1 pr-2 font-medium">Period</th>
+              <th className="py-1 pr-2 font-medium">You</th>
+              <th className="py-1 pr-2 font-medium">Partner</th>
+              <th className="py-1 font-medium">Combined</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.label} className="border-b border-border/40 last:border-0">
+                <td className="py-1 pr-2 text-muted-foreground">{r.label}</td>
+                <td className="py-1 pr-2">{r.self != null ? formatCurrency(r.self) : "—"}</td>
+                <td className="py-1 pr-2">{r.partner != null ? formatCurrency(r.partner) : "—"}</td>
+                <td className="py-1 font-medium">{formatCurrency(r.combined)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {detailRows.length > 0 && (
+        <div className="mt-3">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Annual tax breakdown ({fyLabel})</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[10px] text-muted-foreground border-b border-border">
+                  <th className="py-1 pr-2 font-medium">Item</th>
+                  <th className="py-1 pr-2 font-medium">You</th>
+                  <th className="py-1 pr-2 font-medium">Partner</th>
+                  <th className="py-1 font-medium">Combined</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detailRows.map(r => (
+                  <tr key={r.label} className="border-b border-border/40 last:border-0">
+                    <td className="py-1 pr-2 text-muted-foreground text-xs">{r.label}</td>
+                    <td className="py-1 pr-2 text-xs">{r.self != null ? r.fmt(r.self) : "—"}</td>
+                    <td className="py-1 pr-2 text-xs">{r.partner != null ? r.fmt(r.partner) : "—"}</td>
+                    <td className={cn("py-1 text-xs", r.bold && "font-semibold", r.dim && "text-muted-foreground")}>
+                      {r.combined != null ? r.fmt(r.combined) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {(selfSac || partnerSac) && (
+        <div className="mt-3 rounded-lg bg-accent/60 border border-border p-2 space-y-1.5">
+          <p className="text-[10px] font-semibold text-foreground uppercase tracking-wide">Salary sacrifice — cost to take-home</p>
+          {selfSac && (
+            <p className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">You:</span> {formatCurrency(selfSac.sacrifice)}/yr to super → take-home drops only {formatCurrency(selfSac.cost)}/yr, saving {formatCurrency(selfSac.taxSaving)} in tax (super taxed 15% inside).
+              {selfSac.div293 > 0 && <span className="text-destructive"> Div 293: +{formatCurrency(selfSac.div293)}/yr.</span>}
+            </p>
+          )}
+          {partnerSac && (
+            <p className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">Partner:</span> {formatCurrency(partnerSac.sacrifice)}/yr to super → take-home drops only {formatCurrency(partnerSac.cost)}/yr, saving {formatCurrency(partnerSac.taxSaving)} in tax (super taxed 15% inside).
+              {partnerSac.div293 > 0 && <span className="text-destructive"> Div 293: +{formatCurrency(partnerSac.div293)}/yr.</span>}
+            </p>
+          )}
+        </div>
+      )}
+      {(self || partner) && (
+        <p className="text-[10px] text-muted-foreground mt-2">
+          Estimated net after income tax, Medicare and LITO/WATO, before deductions or HELP repayments.
+          Weekly/fortnightly/monthly are regular take-home; annual includes incentives.
+          Salary sacrifice: You {formatCurrency(selfSalarySacrifice ?? 0)}/yr{partner ? `, Partner ${formatCurrency(partnerSalarySacrifice ?? 0)}/yr` : ""}.
+          Employer super (SG 12%) on top, not included above:
+          You {formatCurrency(selfWithIncentive?.superGuarantee ?? self?.superGuarantee ?? 0)}/yr
+          {incentiveSg > 0 ? ` (incl. ${formatCurrency(incentiveSg)} on incentives)` : ""}
+          + Partner {formatCurrency(partner?.superGuarantee ?? 0)}/yr.
+        </p>
+      )}
+      {selfIncentive && selfIncentive > 0 && incentiveCount > 0 && (
+        <div className="mt-2 rounded-lg bg-warning/10 border border-warning/30 p-2">
+          <p className="text-xs">
+            <span className="font-medium text-foreground">Incentive this FY:</span>{" "}
+            {formatCurrency(selfIncentive)} × {incentiveCount} payment{incentiveCount > 1 ? "s" : ""} (
+            {incentiveMonths.map(m => MONTH_LABELS[m - 1]).join(", ")})
+            → <span className="font-medium">{formatCurrency(incentiveNetPerPayment)} net per payment</span>{" "}
+            ({formatCurrency(incentiveNetTotal)} total, {formatCurrency(incentiveTax)} tax at your marginal rate).
+            Employer also pays {formatCurrency(incentiveSg)}/yr super (SG 12%) on this.
+            In an incentive month your bank gets ≈ {formatCurrency((self?.monthlyNet ?? 0) + incentiveNetPerPayment)}.
+          </p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function BankRuleModal({
@@ -315,7 +561,7 @@ function AccountModal({
 }
 
 export function SettingsPage() {
-  const { budgets, categories, expenses, goals, accounts, bankRules, deleteBankRule, deleteAccount, exportData, importData, selfAge, selfRetirementAge, partnerAge, partnerRetirementAge, updateAgeSettings, selfAnnualSalary, partnerAnnualSalary, taxYearLabel, medicareExempt, selfSalarySacrifice, partnerSalarySacrifice, updateTaxSettings, holdings, getHoldingSummary, unusedConcessionalCaps } = useStore();
+  const { budgets, categories, expenses, goals, accounts, bankRules, deleteBankRule, deleteAccount, exportData, importData, selfAge, selfRetirementAge, partnerAge, partnerRetirementAge, updateAgeSettings, selfAnnualSalary, partnerAnnualSalary, taxYearLabel, medicareExempt, selfSalarySacrifice, partnerSalarySacrifice, selfIncentive, selfIncentiveMonths, updateTaxSettings, holdings, getHoldingSummary, unusedConcessionalCaps } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
   const [showBankRule, setShowBankRule] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
@@ -323,6 +569,11 @@ export function SettingsPage() {
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState<number | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmImport, setConfirmImport] = useState<string | null>(null);
+  const [ruleSearch, setRuleSearch] = useState("");
+
+  const visibleBankRules = ruleSearch.trim()
+    ? bankRules.filter(r => r.keyword.toLowerCase().includes(ruleSearch.trim().toLowerCase()))
+    : bankRules;
 
   const superBalanceFor = (owner: "self" | "partner") =>
     holdings
@@ -331,7 +582,7 @@ export function SettingsPage() {
 
   const selfSuper = superBalanceFor("self");
   const partnerSuper = superBalanceFor("partner");
-  const selfSsi = salarySacrificeInfo(selfAnnualSalary, selfSalarySacrifice, selfSuper, unusedConcessionalCaps, taxYearLabel);
+  const selfSsi = salarySacrificeInfo(selfAnnualSalary, selfSalarySacrifice, selfSuper, unusedConcessionalCaps, taxYearLabel, (selfIncentive ?? 0) * (selfIncentiveMonths?.length ?? 0));
   const partnerSsi = salarySacrificeInfo(partnerAnnualSalary, partnerSalarySacrifice, partnerSuper, unusedConcessionalCaps, taxYearLabel);
 
   // Folder backup state
@@ -358,7 +609,11 @@ export function SettingsPage() {
   const [aiModel, setAiModel] = useState(getAiConfig()?.model ?? "");
   const [aiTesting, setAiTesting] = useState(false);
   const [aiTestResult, setAiTestResult] = useState<string | null>(null);
-  const aiCmd = `OPENCODE_SERVER_PASSWORD=${aiPassword || "<your-password>"} opencode serve --hostname 0.0.0.0 --cors ${window.location.origin} --cors http://localhost:5173`;
+  const aiPasswordHint = aiPassword ? `OPENCODE_SERVER_PASSWORD=${aiPassword} ` : "";
+  const isLocalHost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const aiCmd = isLocalHost
+    ? `${aiPasswordHint}opencode serve --port 4096 --hostname 127.0.0.1 --cors http://localhost:5173`
+    : `${aiPasswordHint}opencode serve --port 4096 --hostname 0.0.0.0 --cors ${window.location.origin} --cors http://localhost:5173`;
 
   const saveAiConfig = (serverUrl: string, password: string, model: string) => {
     setAiConfig({ serverUrl: serverUrl || defaultServerUrl(), password: password || undefined, model: model || undefined });
@@ -656,6 +911,7 @@ export function SettingsPage() {
                   onChange={v => updateTaxSettings({ selfAnnualSalary: parseFloat(v) || undefined })} placeholder="e.g. 85000" />
                 <Input label="Salary Sacrifice / yr" type="number" value={selfSalarySacrifice != null ? String(selfSalarySacrifice) : ""}
                   onChange={v => updateTaxSettings({ selfSalarySacrifice: parseFloat(v) || undefined })} placeholder="e.g. 10000" />
+                <IncentiveInput />
                 <div className="space-y-1">
                   <p className="text-[10px] text-muted-foreground">
                     Employer SG: {formatCurrency(selfSsi.sg)}/yr · Cap: {formatCurrency(selfSsi.caps.concessionalCap)}/yr · Room: <span className="text-success font-medium">{formatCurrency(selfSsi.annualRoom)}/yr</span>
@@ -735,6 +991,9 @@ export function SettingsPage() {
                 </div>
               </div>
             </div>
+            <div className="mt-3">
+              <TakeHomeSummary />
+            </div>
             <div className="mt-3 space-y-3">
               <div className="flex gap-3 items-end">
                 <div className="flex-1 max-w-[200px]">
@@ -772,8 +1031,11 @@ export function SettingsPage() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-muted-foreground">
                   Connect to your local opencode server so the app can auto-match statements and answer questions about your finances.
-                  Run the command below on your laptop and keep it running while you import.
+                  Run the command below in a terminal on this PC and keep it running while you import.
                 </p>
+                {!aiPassword && isLocalHost && (
+                  <p className="mt-1 text-[11px] text-success">No password needed when the app and server are on the same PC.</p>
+                )}
                 <div className="mt-2 flex items-center gap-1.5">
                   <code className="flex-1 block text-[10px] font-mono bg-background border border-border rounded-md px-2 py-1.5 text-muted-foreground break-all">
                     {aiCmd}
@@ -920,12 +1182,7 @@ export function SettingsPage() {
                     </p>
                     <div className="flex gap-2 mt-2">
                       <Button label="Backup Now" onClick={handleBackupNow} variant="secondary" size="sm" icon={Upload} />
-                      <button
-                        onClick={handleRemoveFolder}
-                        className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40 transition-colors"
-                      >
-                        Disable
-                      </button>
+                      <Button label="Disable" onClick={handleRemoveFolder} variant="outline" size="sm" />
                     </div>
                   </>
                 ) : (
@@ -962,19 +1219,8 @@ export function SettingsPage() {
                     </p>
                     <div className="flex gap-2 mt-2">
                       <Button label="Sync Now" onClick={handleDriveSyncNow} variant="secondary" size="sm" icon={Cloud} />
-                      <button
-                        onClick={() => setShowDriveConfig(true)}
-                        className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        Change Client ID
-                      </button>
-                      <button
-                        onClick={handleDriveDisconnect}
-                        className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40 transition-colors"
-                      >
-                        <Unlink size={12} className="inline mr-1" />
-                        Disconnect
-                      </button>
+                      <Button label="Change Client ID" onClick={() => setShowDriveConfig(true)} variant="outline" size="sm" />
+                      <Button label="Disconnect" onClick={handleDriveDisconnect} variant="outline" size="sm" icon={Unlink} />
                     </div>
                     <button
                       onClick={handleRestoreFromDrive}
@@ -1045,12 +1291,7 @@ export function SettingsPage() {
                       </p>
                       <p className="text-[10px] text-muted-foreground mt-1 font-mono">{getStatementFolderId()}</p>
                       <div className="flex gap-2 mt-2">
-                        <button
-                          onClick={handleRemoveStmtFolder}
-                          className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40 transition-colors"
-                        >
-                          Remove Folder
-                        </button>
+                        <Button label="Remove Folder" onClick={handleRemoveStmtFolder} variant="outline" size="sm" />
                       </div>
                       <p className="text-xs text-muted-foreground mt-2">
                         Go to <strong>Statements</strong> page and tap "Scan Drive Folder" to import files.
@@ -1092,12 +1333,7 @@ export function SettingsPage() {
                       <p className="text-sm font-semibold text-foreground">✅ Local folder configured</p>
                       {importFolderName && <p className="text-xs text-muted-foreground mt-0.5">{importFolderName}</p>}
                       <div className="flex gap-2 mt-2">
-                        <button
-                          onClick={handleRemoveImportFolder}
-                          className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-destructive hover:border-destructive/40 transition-colors"
-                        >
-                          Remove Folder
-                        </button>
+                        <Button label="Remove Folder" onClick={handleRemoveImportFolder} variant="outline" size="sm" />
                       </div>
                       <p className="text-xs text-muted-foreground mt-2">
                         Go to <strong>Statements</strong> page and tap "Import from Local Folder" to import files.
@@ -1135,10 +1371,16 @@ export function SettingsPage() {
             </Card>
           ) : (
             <Card padding={false}>
-              {bankRules.map((rule, i) => (
+              <div className="p-3 border-b border-border">
+                <SearchInput value={ruleSearch} onChange={setRuleSearch} placeholder="Search rules…" />
+              </div>
+              {visibleBankRules.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-4">No rules match "{ruleSearch}"</p>
+              )}
+              {visibleBankRules.map((rule, i) => (
                 <div
                   key={rule.id}
-                  className={cn("flex items-center gap-3 px-4 py-3", i < bankRules.length - 1 && "border-b border-border")}
+                  className={cn("flex items-center gap-3 px-4 py-3", i < visibleBankRules.length - 1 && "border-b border-border")}
                 >
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground">{rule.keyword}</p>

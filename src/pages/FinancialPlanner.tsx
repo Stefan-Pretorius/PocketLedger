@@ -1,11 +1,11 @@
-import { useState, useMemo, useCallback, useRef, memo } from "react";
+import { useState, useMemo, useCallback, memo } from "react";
 import { useStore } from "../store";
 import { formatCurrency, formatDate, getBudgetDateRange } from "../utils";
 import { Card, Button, Input, SectionHeader } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import {
   Home, TrendingUp, Calculator, PiggyBank, Landmark, Shield,
-  ChevronRight, DollarSign, Clock, BarChart3, SlidersHorizontal,
+  ChevronRight, DollarSign, Clock, BarChart3, SlidersHorizontal, Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -56,10 +56,9 @@ function usePlannerInputs<T extends Record<string, number | boolean | string>>(
 ): [T, (patch: Partial<T>) => void] {
   const stored = useStore(s => s.plannerInputs[tabId]);
   const setPlannerInputs = useStore(s => s.setPlannerInputs);
-  const defaultsRef = useRef(defaults);
   const inputs = useMemo(() =>
-    (stored ? { ...defaultsRef.current, ...stored } : defaultsRef.current) as T,
-    [stored],
+    (stored ? { ...defaults, ...stored } : defaults) as T,
+    [stored, defaults],
   );
   const setPartial = useCallback((patch: Partial<T>) => {
     setPlannerInputs(tabId, patch as unknown as Record<string, number | boolean | string>);
@@ -112,10 +111,7 @@ const ScenarioBar = memo(function ScenarioBar({ tabId, currentInputs }: { tabId:
         className="h-7 px-2 rounded-lg bg-background border border-border text-xs text-foreground placeholder:text-muted-foreground/50 outline-none focus:border-primary w-28"
         onKeyDown={e => { if (e.key === "Enter") handleSave(); }}
       />
-      <button onClick={handleSave}
-        className="h-7 px-2.5 rounded-lg bg-primary text-primary-foreground text-[11px] font-medium hover:opacity-90 transition-opacity">
-        Save
-      </button>
+      <Button label="Save" onClick={handleSave} size="sm" icon={Check} />
       <div className="w-px h-5 bg-border mx-1" />
       <select
         value={selectedId ?? ""}
@@ -127,14 +123,8 @@ const ScenarioBar = memo(function ScenarioBar({ tabId, currentInputs }: { tabId:
           <option key={sc.id} value={sc.id}>{sc.name}</option>
         ))}
       </select>
-      <button onClick={handleLoad} disabled={!selected}
-        className="h-7 px-2.5 rounded-lg bg-primary text-primary-foreground text-[11px] font-medium hover:opacity-90 transition-opacity disabled:opacity-30">
-        Load
-      </button>
-      <button onClick={handleDelete} disabled={!selected}
-        className="h-7 px-2.5 rounded-lg bg-destructive/10 text-destructive text-[11px] font-medium hover:bg-destructive/20 transition-colors disabled:opacity-30">
-        Delete
-      </button>
+      <Button label="Load" onClick={handleLoad} disabled={!selected} size="sm" variant="secondary" />
+      <Button label="Delete" onClick={handleDelete} disabled={!selected} size="sm" variant="danger" />
     </div>
   );
 });
@@ -187,8 +177,15 @@ const PIVOT_DEFAULTS = {
 // ─── Rent vs Buy ────────────────────────────────────────────────────────────
 
 function RentVsBuy() {
-  const selfAnnualSalary = useStore(s => s.selfAnnualSalary);
-  const [i, setI] = usePlannerInputs("rent-vs-buy", RENT_VS_BUY_DEFAULTS);
+  const selfAge = useStore(s => s.selfAge);
+  const selfRetirementAge = useStore(s => s.selfRetirementAge);
+  const ageDefaults = useMemo(() => ({
+    ...RENT_VS_BUY_DEFAULTS,
+    currentAge: selfAge ?? RENT_VS_BUY_DEFAULTS.currentAge,
+    retirementAge: selfRetirementAge ?? RENT_VS_BUY_DEFAULTS.retirementAge,
+    downsizeAge: selfRetirementAge ?? RENT_VS_BUY_DEFAULTS.downsizeAge,
+  }), [selfAge, selfRetirementAge]);
+  const [i, setI] = usePlannerInputs("rent-vs-buy", ageDefaults);
 
   const result = useMemo(() => {
     const years = i.targetAge - i.currentAge;
@@ -205,6 +202,13 @@ function RentVsBuy() {
       ? loanAmount * (monthlyRate * Math.pow(1 + monthlyRate, totalPayments))
         / (Math.pow(1 + monthlyRate, totalPayments) - 1)
       : 0;
+
+    // Year-1 assumptions shown in the "How It's Calculated" card
+    const year1Rent = i.weeklyRent * 52;
+    const year1PropertyCosts = i.councilRates + i.homeInsurance + i.strataBodyCorp
+      + i.purchasePrice * (i.maintenancePct / 100);
+    const renterYear1Savings = i.annualIncome - year1Rent;
+    const buyerYear1Savings = i.annualIncome - (monthlyRepayment * 12 + year1PropertyCosts);
 
     const cgtRate = i.cgtRatePct / 100;
     const investReturn = i.investReturnPct / 100;
@@ -340,8 +344,9 @@ function RentVsBuy() {
         newPropertyValue = newPropertyValue * (1 + i.capitalGrowthPct / 100);
         totalPropertyCostsPaid += yearDownsizeCosts;
       } else if (i.downsizeAction === "rent") {
-        yearDownsizeCosts = currentWeeklyRent * 52;
-        totalRentPaid += yearDownsizeCosts;
+        // NOTE: rent after downsizing is counted via yearRent below (currentWeeklyRent
+        // was set to the downsized rent) — do NOT add it here as well.
+        yearDownsizeCosts = 0;
       }
 
       // ─── Renter ───
@@ -361,15 +366,15 @@ function RentVsBuy() {
       const buyerSurplus = yearIncome - totalBuyerHousingCost + buyerPension;
       buyerPortfolio = Math.max(0, buyerPortfolio + buyerGrossGain - buyerTax + buyerSurplus);
 
-      const nextRentVal = currentWeeklyRent * (1 + i.rentIncreasePct / 100) * 52;
-      const prevRentVal = rentPerYear[rentPerYear.length - 1] || nextRentVal;
+      const thisRentVal = currentWeeklyRent * 52;
+      const prevRentVal = rentPerYear[rentPerYear.length - 1] || thisRentVal;
       const displayPropertyCosts = !downsizeExecuted
         ? yearPropertyCosts
         : (i.downsizeAction === "buy"
             ? (i.downsizeCouncilRates + i.downsizeHomeInsurance + i.downsizeStrataBodyCorp) * inflationFactor
               + newPropertyValue * (i.downsizeMaintenancePct / 100)
             : 0);
-      rentPerYear.push(nextRentVal);
+      rentPerYear.push(thisRentVal);
       mortgagePerYear.push(yearMortgagePayment + yearDownsizeCosts);
       equityPerYear.push(!downsizeExecuted ? Math.max(0, propertyValue - loanBalance)
         : (i.downsizeAction === "buy" ? Math.max(0, newPropertyValue - newLoanBalance) : 0));
@@ -378,7 +383,7 @@ function RentVsBuy() {
       interestPerYear.push(yearInterestPaid);
       principalPerYear.push(yearPrincipalPaid);
       propertyCostsPerYear.push(displayPropertyCosts);
-      rentChangePerYear.push(nextRentVal - prevRentVal);
+      rentChangePerYear.push(thisRentVal - prevRentVal);
 
       currentWeeklyRent *= (1 + i.rentIncreasePct / 100);
     }
@@ -393,7 +398,9 @@ function RentVsBuy() {
       rentPath, buyPath,
       renterPensionPath, buyerPensionPath,
       stampDuty: stampDutyResult.netDuty,
+      deposit, totalUpfront,
       monthlyRepayment,
+      year1Rent, year1PropertyCosts, renterYear1Savings, buyerYear1Savings,
       breakevenYear: breakevenYear > 0 ? breakevenYear : null,
       finalRentNetWorth: rentPath[years],
       finalBuyNetWorth: buyPath[years],
@@ -577,6 +584,63 @@ function RentVsBuy() {
           Pension is means-tested on assessable assets. Home (PPR) is EXCLUDED from the assets test, so buyers may qualify for more pension. 
           Renter's investments ARE assessable — full pension below {formatCurrency(PENSION_ASSET_LOWER_NONHOMEOWNER)}, none above {formatCurrency(PENSION_ASSET_UPPER_NONHOMEOWNER)} (couple, non-homeowner).
           Maximum pension: {formatCurrency(PENSION_MAX_COUPLE)}/yr.
+        </p>
+      </Card>
+
+      {/* How It's Calculated */}
+      <Card className="space-y-3">
+        <SectionHeader title="How It's Calculated (Year 1)" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Upfront (Renter invests this)</p>
+            {[
+              ["Purchase price", i.purchasePrice],
+              ["Deposit", result.deposit],
+              ["SA stamp duty", result.stampDuty],
+              ["Other purchase costs", 1500],
+            ].map(([label, val]) => (
+              <div key={String(label)} className="flex justify-between text-xs">
+                <span className="text-muted-foreground">{String(label)}</span>
+                <span className="text-foreground font-medium">{formatCurrency(Number(val))}</span>
+              </div>
+            ))}
+            <div className="flex justify-between text-xs font-semibold border-t border-border pt-1.5">
+              <span className="text-foreground">Total upfront</span>
+              <span className="text-foreground">{formatCurrency(result.totalUpfront)}</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Year 1 cash flow</p>
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Annual household income</span>
+              <span className="text-foreground font-medium">{formatCurrency(i.annualIncome)}</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Rent ({i.weeklyRent}/wk)</span>
+              <span className="text-foreground">{formatCurrency(result.year1Rent)}</span>
+            </div>
+            <div className="flex justify-between text-xs font-medium bg-primary/5 rounded-lg px-2 py-1">
+              <span className="text-foreground">Renter yearly savings</span>
+              <span className="text-success">{formatCurrency(result.renterYear1Savings)}</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Mortgage ({formatCurrency(result.monthlyRepayment)}/mo)</span>
+              <span className="text-foreground">{formatCurrency(result.monthlyRepayment * 12)}</span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">Property costs (rates + insurance + {i.maintenancePct}% maint.)</span>
+              <span className="text-foreground">{formatCurrency(result.year1PropertyCosts)}</span>
+            </div>
+            <div className="flex justify-between text-xs font-medium bg-success/5 rounded-lg px-2 py-1">
+              <span className="text-foreground">Buyer yearly savings</span>
+              <span className="text-success">{formatCurrency(result.buyerYear1Savings)}</span>
+            </div>
+          </div>
+        </div>
+        <p className="text-[10px] text-muted-foreground">
+          Savings = income minus housing only; other living costs are excluded and apply equally to both paths.
+          Rent grows at the rent-increase rate, income and property costs grow at the inflation rate, and
+          year-1 savings are re-invested at {i.investReturnPct}% (returns taxed at {i.cgtRatePct}%) until age {i.targetAge}.
         </p>
       </Card>
 
@@ -1255,7 +1319,8 @@ function FireCalculator() {
 
   const result = useMemo(() => {
     const currentAge = selfAge ?? 30;
-    const maxYears = Math.max(1, 65 - currentAge);
+    const retireAge = selfRetirementAge ?? 65;
+    const maxYears = Math.max(1, retireAge - currentAge);
 
     // Portfolio
     const portfolio = holdings.reduce((sum, h) => {
@@ -1437,7 +1502,7 @@ function FireCalculator() {
       selfSG, partnerSG, selfTotalSuper, partnerTotalSuper,
       selfCCUsed, partnerCCUsed, CC_CAP,
       fireNumber, yearsToFIRE, fireAge,
-      projection, currentAge, autoSelfRate, autoPartnerRate,
+      projection, currentAge, retireAge, autoSelfRate, autoPartnerRate,
       monthlyProjection,
     };
   }, [i, selfAge, selfRetirementAge, selfAnnualSalary, partnerAnnualSalary,
@@ -1863,7 +1928,7 @@ function FireCalculator() {
               <div>
                 <p className="text-sm font-medium text-foreground">Increase savings or returns</p>
                 <p className="text-xs text-muted-foreground">
-                  At current rate, FIRE isn't reached by age {result.currentAge + Math.max(1, 65 - result.currentAge)}.
+                  At current rate, FIRE isn't reached by age {result.retireAge}.
                   Try increasing your savings rate or investment returns.
                 </p>
               </div>
@@ -2557,11 +2622,13 @@ function PivotOptimizer() {
                 {auto.top.id === "giftToSpouse" && `Gift ${formatCurrency(auto.top.value)}/yr to spouse`}
                 {auto.top.id === "portfolioReturnPct" && `Target ${auto.top.value}% portfolio return`}
               </p>
-              <button
+              <Button
+                label="Apply"
                 onClick={() => setI({ [auto.top.id]: auto.top.value })}
-                className="mt-2 w-full h-8 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity">
-                Apply
-              </button>
+                className="mt-2 w-full"
+                size="sm"
+                icon={Check}
+              />
             </>
           ) : (
             <p className="text-[10px] text-muted-foreground">Adjust the levers below to see what helps most.</p>

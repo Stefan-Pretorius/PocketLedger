@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useStore } from "../store";
 import { getBudgetDateRange, computeSankeyData, monthlyCategoryAmount, formatCurrency } from "../utils";
-import { EmptyState } from "../components/ui";
+import { EmptyState, Button } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { Sankey } from "../components/Sankey";
 import { BudgetYearTabs, BudgetMonthGrid } from "../components/BudgetPicker";
@@ -66,18 +66,13 @@ export function MoneyFlowPage() {
       <PageHeader title="Money Flow" subtitle="See how money flows from income sources through accounts to spending categories and goals"
         actions={
           summary ? (
-            <button
+            <Button
+              label={verifyMode ? "Exit Verify" : "Verify"}
               onClick={() => setVerifyMode(v => !v)}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors",
-                verifyMode
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "bg-muted text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <ClipboardCheck size={14} />
-              {verifyMode ? "Exit Verify" : "Verify"}
-            </button>
+              variant={verifyMode ? "primary" : "secondary"}
+              size="sm"
+              icon={ClipboardCheck}
+            />
           ) : undefined
         }
       />

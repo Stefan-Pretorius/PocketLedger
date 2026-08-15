@@ -5,7 +5,7 @@ import { useStore, type ImportedTransaction } from "../store";
 import type { ImportedStatement, BankMappingRule, IncomeSource } from "../types";
 import { formatCurrency, formatDate, getBudgetDateRange } from "../utils";
 import { Colors } from "../theme";
-import { Card, Button, Input, Modal, SectionHeader, ColorDot, ColorPicker } from "../components/ui";
+import { Card, Button, Input, Modal, SectionHeader, ColorDot, ColorPicker, SearchInput } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { useAiChat, type AiAssignment } from "../useAiChat";
 import { getAiConfig } from "../aimatch";
@@ -13,7 +13,7 @@ import { getAiConfig } from "../aimatch";
 import {
   Upload, FileText, Check, AlertTriangle, Receipt, Download, Trash2,
   CheckCircle2, XCircle, MinusCircle, Star, Plus, Target, Landmark, FolderPlus, FilePlus, ChevronRight,
-  Cloud, RefreshCw, Sparkles, Send, Loader2,
+  Cloud, RefreshCw, Sparkles, Send, Loader2, Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -792,6 +792,7 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
   const goalCount = rows.filter(r => !r.skip && (r.goalId !== null || r.goalWithdrawalId != null)).length;
   const transferCount = rows.filter(r => r.isHouseholdTransfer).length;
   const toImport = rows.filter(r => !r.skip && !r.isHouseholdTransfer).length;
+  const duplicateCount = rows.filter(r => r.isDuplicate).length;
 
   // Compute withdrawal-merchant pairings for preview
   const withdrawalPairs = (() => {
@@ -822,9 +823,9 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
         if (idx === i) {
           // When setting household transfer, clear other assignments
           if (patch.isHouseholdTransfer) {
-            return { ...r, categoryId: null, goalId: null, goalWithdrawalId: undefined, holdingId: undefined, incomeSourceName: undefined, skip: false, isHouseholdTransfer: true, autoMatched: false };
+            return { ...r, categoryId: null, goalId: null, goalWithdrawalId: undefined, holdingId: undefined, incomeSourceName: undefined, skip: false, isHouseholdTransfer: true, autoMatched: false, isDuplicate: undefined };
           }
-          return { ...r, ...patch, autoMatched: false };
+          return { ...r, ...patch, autoMatched: false, isDuplicate: undefined };
         }
         // Auto-match other unassigned rows with similar descriptions (skip for transfers)
         if (r.skip || r.isHouseholdTransfer || r.categoryId != null || r.goalId != null || r.goalWithdrawalId != null || r.holdingId != null || r.incomeSourceName != null) return r;
@@ -836,10 +837,10 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
     }
     // When unassigning (v === ""), clear isHouseholdTransfer too
     if (patch.isHouseholdTransfer === false) {
-      onChange(rows.map((r, idx) => idx === i ? { ...r, isHouseholdTransfer: false } : r));
+      onChange(rows.map((r, idx) => idx === i ? { ...r, isHouseholdTransfer: false, isDuplicate: undefined } : r));
       return;
     }
-    onChange(rows.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+    onChange(rows.map((r, idx) => idx === i ? { ...r, ...patch, isDuplicate: undefined } : r));
   };
 
   // ─── AI Statement Matching ────────────────────────────────────────────────────
@@ -946,7 +947,25 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
             <Landmark size={12} />{transferCount} transferred
           </span>
         )}
+        {duplicateCount > 0 && (
+          <span className="flex items-center gap-1.5 bg-destructive/10 text-destructive text-xs font-medium px-2.5 py-1.5 rounded-full">
+            <Copy size={12} />{duplicateCount} duplicate
+          </span>
+        )}
       </div>
+
+      {duplicateCount > 0 && (
+        <div className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-warning/10 border border-warning/30">
+          <AlertTriangle size={16} className="text-warning flex-shrink-0" />
+          <p className="text-xs text-warning flex-1 min-w-0">
+            {duplicateCount} transaction{duplicateCount !== 1 ? "s" : ""} already in the ledger (same date, amount &amp; description) {duplicateCount !== 1 ? "are" : "is"} excluded and will be skipped.
+          </p>
+          <div className="flex items-center gap-1.5">
+            <Button label="Skip duplicates" onClick={() => onChange(rows.map(r => r.isDuplicate ? { ...r, isDuplicate: undefined } : r))} variant="secondary" size="sm" />
+            <Button label="Reimport anyway" onClick={() => onChange(rows.map(r => r.isDuplicate ? { ...r, skip: false, isDuplicate: undefined } : r))} variant="secondary" size="sm" />
+          </div>
+        </div>
+      )}
 
       <p className="text-xs text-muted-foreground">
         <span className="font-medium text-foreground">{fileName}</span> — {rows.length} transactions.{" "}
@@ -1038,6 +1057,11 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
                       {row.balance != null && <span className="ml-2 text-[10px] text-muted-foreground/60">bal: {formatCurrency(row.balance)}</span>}
                     </span>
                     <div className="flex items-center gap-1">
+                      {row.isDuplicate && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full text-destructive bg-destructive/10">
+                          duplicate
+                        </span>
+                      )}
                       {row.isHouseholdTransfer ? (
                         <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full text-primary bg-primary/10">
                           🏠 Household Transfer
@@ -1202,7 +1226,7 @@ function ImportReview({ fileName, rows, onChange, onConfirm, onCancel, categorie
             />
           )}
           <Button label="Cancel" onClick={onCancel} variant="secondary" size="sm" />
-          <Button label={`Import ${toImport}`} onClick={onConfirm} variant="primary" size="sm" icon={Check} disabled={toImport === 0} />
+          <Button label={`Import ${toImport}`} onClick={onConfirm} variant="primary" size="sm" icon={Check} disabled={toImport === 0 || duplicateCount > 0} />
         </div>
       </div>
 
@@ -1401,6 +1425,7 @@ export function StatementsPage() {
   const [localFiles, setLocalFiles] = useState<Awaited<ReturnType<typeof listImportFiles>> | null>(null);
   const [selectedLocalFiles, setSelectedLocalFiles] = useState<Set<string>>(new Set());
   const [importingLocal, setImportingLocal] = useState(false);
+  const [fileSearch, setFileSearch] = useState("");
 
   const proceedWithDuplicateImport = async (file: File) => {
     setDuplicateFileConfirm(null);
@@ -1948,8 +1973,9 @@ export function StatementsPage() {
                       <p className="text-sm text-muted-foreground text-center py-4">No files found in the folder</p>
                     ) : (
                       <>
+                        <SearchInput value={fileSearch} onChange={setFileSearch} placeholder="Search files…" />
                         <div className="divide-y divide-border max-h-64 overflow-y-auto -mx-4">
-                          {driveFiles.map(f => {
+                          {driveFiles.filter(f => fileSearch.trim() ? f.name.toLowerCase().includes(fileSearch.trim().toLowerCase()) : true).map(f => {
                             const alreadyImported = importedStatements.some(
                               s => s.driveFileId === f.id && s.driveModifiedTime === f.modifiedTime,
                             );
@@ -2009,8 +2035,9 @@ export function StatementsPage() {
                       <p className="text-sm text-muted-foreground text-center py-4">No CSV/OFX/PDF files found</p>
                     ) : (
                       <>
+                        <SearchInput value={fileSearch} onChange={setFileSearch} placeholder="Search files…" />
                         <div className="divide-y divide-border max-h-64 overflow-y-auto -mx-4">
-                          {localFiles.map(f => {
+                          {localFiles.filter(f => fileSearch.trim() ? f.name.toLowerCase().includes(fileSearch.trim().toLowerCase()) : true).map(f => {
                             const alreadyImported = importedStatements.some(
                               s => s.fileName.toLowerCase() === f.name.toLowerCase(),
                             );
@@ -2312,7 +2339,7 @@ export function StatementsPage() {
                 </div>
                 <div className="flex gap-2 pt-1">
                   <Button label="Cancel" onClick={() => setDeleteConfirmStmt(null)} variant="secondary" fullWidth />
-                  <Button label="Delete" onClick={confirmDeleteStmt} variant="primary" fullWidth icon={Trash2} />
+                  <Button label="Delete" onClick={confirmDeleteStmt} variant="danger" fullWidth icon={Trash2} />
                 </div>
               </div>
             </Modal>

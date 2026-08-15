@@ -18,3 +18,6 @@ export type { CgtEvent, CgtSummary } from "./cgt";
 
 export { calculateSaStampDuty, calculateSaLandTax } from "./sa";
 export type { StampDutyResult } from "./sa";
+
+export { calculatePaygWithholding, calculatePayg, calculatePaygForLabel } from "./payg";
+export type { PaygWithholding, PaygPeriodBreakdown } from "./payg";

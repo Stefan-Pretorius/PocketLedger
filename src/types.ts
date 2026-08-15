@@ -270,6 +270,8 @@ export interface BudgetSummary {
   carryover: number;
   totalIncome: number;
   totalAllocated: number;
+  /** Total contributed to goals this period (savings, not spending) */
+  allocatedToGoals: number;
   totalSpent: number;
   /** Total of rounding/savings category expenses (excluded from totalSpent) */
   totalRoundingSaved: number;

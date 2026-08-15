@@ -38,6 +38,9 @@ export interface StoreData {
   /** Existing salary sacrifice amount per year */
   selfSalarySacrifice?: number;
   partnerSalarySacrifice?: number;
+  /** Incentive/bonus per payment and the months (1-12) expected this FY */
+  selfIncentive?: number;
+  selfIncentiveMonths?: number[];
   /** Unused concessional caps from prior years (for carry-forward) */
   unusedConcessionalCaps?: number[];
 
@@ -71,7 +74,7 @@ function load(): StoreData {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [], scenarios: [], plannerScenarios: [], plannerInputs: {}, lastRefreshedAt: undefined, selfAge: undefined, selfRetirementAge: undefined, partnerAge: undefined, partnerRetirementAge: undefined, selfAnnualSalary: undefined, partnerAnnualSalary: undefined, taxYearLabel: undefined, medicareExempt: undefined, selfSalarySacrifice: undefined, partnerSalarySacrifice: undefined, unusedConcessionalCaps: undefined };
+  return { accounts: [], budgets: [], categories: [], expenses: [], goals: [], recurring: [], incomeSources: [], bankRules: [], holdings: [], holdingTransactions: [], importedStatements: [], budgetSections: [], scenarios: [], plannerScenarios: [], plannerInputs: {}, lastRefreshedAt: undefined, selfAge: undefined, selfRetirementAge: undefined, partnerAge: undefined, partnerRetirementAge: undefined, selfAnnualSalary: undefined, partnerAnnualSalary: undefined, taxYearLabel: undefined, medicareExempt: undefined, selfSalarySacrifice: undefined, partnerSalarySacrifice: undefined, selfIncentive: undefined, selfIncentiveMonths: undefined, unusedConcessionalCaps: undefined };
 }
 
 function save(data: StoreData) {
@@ -144,6 +147,8 @@ export interface ImportedTransaction {
   incomeSourceName?: string;
   /** When set, the transaction is a household transfer — no expense created */
   isHouseholdTransfer?: boolean;
+  /** When set, an expense with the same date/amount/description already exists — this row is a duplicate */
+  isDuplicate?: boolean;
 }
 
 interface AppState extends StoreData {
@@ -254,6 +259,8 @@ interface AppState extends StoreData {
     medicareExempt?: boolean;
     selfSalarySacrifice?: number;
     partnerSalarySacrifice?: number;
+    selfIncentive?: number;
+    selfIncentiveMonths?: number[];
     unusedConcessionalCaps?: number[];
   }) => void;
 
@@ -373,16 +380,21 @@ export const useStore = create<AppState>()((set, get) => ({
       .filter(c => c.budgetId === budgetId)
       .map(c => ({
         ...c,
-        spent: budgetExpenses.filter(e => e.categoryId === c.id).reduce((s, e) => s + e.amount, 0),
+        spent: budgetExpenses.filter(e => e.categoryId === c.id && e.goalId == null).reduce((s, e) => s + e.amount, 0),
         isRounding: c.isRounding ?? false,
       }));
     const roundingCats = cats.filter(c => c.isRounding);
     const budgetCats = cats.filter(c => !c.isRounding);
     const totalRoundingSaved = roundingCats.reduce((s, c) => s + (c.spent ?? 0), 0);
-    const totalAllocated = budgetCats.reduce((s, c) => s + monthlyCategoryAmount(c.allocatedAmount, c.frequency), 0);
+    // Goal contributions are savings, not spending — they still reduce ready-to-assign
+    const allocatedToCategories = budgetCats.reduce((s, c) => s + monthlyCategoryAmount(c.allocatedAmount, c.frequency), 0);
+    const allocatedToGoals = budgetExpenses
+      .filter(e => e.goalId != null)
+      .reduce((s, e) => s + e.amount, 0);
+    const totalAllocated = allocatedToCategories + allocatedToGoals;
     const totalSpent = budgetCats.reduce((s, c) => s + (c.spent ?? 0), 0);
     const uncategorizedTotal = budgetExpenses
-      .filter(e => e.categoryId == null)
+      .filter(e => e.categoryId == null && e.goalId == null)
       .reduce((s, e) => s + e.amount, 0);
     return {
       budget,
@@ -392,12 +404,13 @@ export const useStore = create<AppState>()((set, get) => ({
       carryover,
       totalIncome,
       totalAllocated,
+      allocatedToGoals,
       totalSpent,
       totalRoundingSaved,
       roundingCategories: roundingCats,
       uncategorizedTotal,
       unallocated: totalIncome - totalAllocated,
-      remaining: totalIncome - (totalSpent + uncategorizedTotal),
+      remaining: totalIncome - (totalSpent + uncategorizedTotal + allocatedToGoals),
     };
   },
 
@@ -846,11 +859,12 @@ export const useStore = create<AppState>()((set, get) => ({
     return transactions
       .filter(tx => tx.amount > 0)
       .map(tx => {
+        const normDesc = (s: string) => (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
         const isDuplicate = expenses.some(
-          e => e.importedFromBank && e.budgetId === budgetId && e.description === tx.description && e.date === tx.date && e.amount === tx.amount,
+          e => e.date === tx.date && Math.abs(e.amount - tx.amount) < 0.005 && normDesc(e.description) === normDesc(tx.description),
         );
         if (isDuplicate) {
-          return { ...tx, categoryId: null, goalId: null, goalWithdrawalId: undefined, skip: true, autoMatched: false };
+          return { ...tx, categoryId: null, goalId: null, goalWithdrawalId: undefined, skip: true, autoMatched: false, isDuplicate: true };
         }
 
         const desc = tx.description.toLowerCase();

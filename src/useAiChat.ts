@@ -1,6 +1,6 @@
 // ─── Shared AI chat hook for "Ask AI" and statement matching ─────────────────
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getAiConfig, type AiConfig, createSession, deleteSession, sendMessage, extractJson } from "./aimatch";
+import { getEffectiveConfig, createSession, deleteSession, sendMessage, extractJson } from "./aimatch";
 
 export type AiAssignment = {
   index: number;
@@ -56,15 +56,14 @@ export function useAiChat(systemPrompt: string) {
   useEffect(() => { messagesRef.current = messages; }, [messages]);
 
   useEffect(() => {
-    const cfg = getAiConfig();
+    const cfg = getEffectiveConfig();
     configRef.current = cfg;
     setConnected(!!cfg);
   }, []);
 
   const ensureSession = useCallback(async () => {
     if (sessionIdRef.current) return sessionIdRef.current;
-    const cfg = getAiConfig();
-    if (!cfg) throw new Error("AI is not configured. Open Settings → AI Statement Matching to set it up.");
+    const cfg = getEffectiveConfig();
     configRef.current = cfg;
     const id = await createSession(cfg, "PocketLedger AI");
     sessionIdRef.current = id;
@@ -98,6 +97,9 @@ export function useAiChat(systemPrompt: string) {
       setMessages(prev => [...prev, msg]);
       return msg;
     } catch (e) {
+      // A failed send usually means the server was restarted and the cached
+      // session id is stale — drop it so the next attempt creates a new one.
+      sessionIdRef.current = null;
       setError((e as Error).message);
       return null;
     } finally {

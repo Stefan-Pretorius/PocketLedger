@@ -4,7 +4,7 @@ import { formatCurrency, formatDate, monthName, currentMonth, today, monthlyInco
 import { Colors } from "../theme";
 import {
   Card, Button, Input, Modal, EmptyState, SectionHeader,
-  ColorPicker, MonthPicker, YearPicker, ProgressBar, ColorDot, Confirm, AccountPicker,
+  ColorPicker, MonthPicker, YearPicker, ProgressBar, ColorDot, Confirm, AccountPicker, FilterPill,
 } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { BudgetYearTabs, BudgetMonthGrid } from "../components/BudgetPicker";
@@ -272,8 +272,8 @@ function CategoryModal({
               <input type="text" value={newSectionName} onChange={e => setNewSectionName(e.target.value)}
                 placeholder="Section name"
                 className="flex-1 px-3 py-1.5 rounded-lg border border-border bg-card text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/30" />
-              <button onClick={addSection} className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium">Add</button>
-              <button onClick={() => setShowNewSection(false)} className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium">Cancel</button>
+              <Button label="Add" onClick={addSection} size="sm" icon={Plus} />
+              <Button label="Cancel" onClick={() => setShowNewSection(false)} size="sm" variant="secondary" />
             </div>
           )}
         </div>
@@ -788,6 +788,19 @@ function CategoryCard({ cat, recurring, activeBudgetId, expandedCategory, setExp
             </div>
           </div>
           <ProgressBar value={pct} color={over ? Colors.danger : cat.color} height={6} />
+          {linkedGoal && (
+            <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+              <span className="flex items-center gap-1 truncate min-w-0">
+                <Target size={9} style={{ color: linkedGoal.color }} className="flex-shrink-0" />
+                <span className="truncate">{linkedGoal.name}</span>
+              </span>
+              <span className="flex-shrink-0">
+                <span className="text-success font-medium">
+                  +{formatCurrency(expenses.filter((e: any) => e.goalId === linkedGoal.id && !e.isWithdrawal).reduce((s: any, e: any) => s + e.amount, 0))}
+                </span> this period · <span className="text-foreground font-medium">{formatCurrency(linkedGoal.currentAmount)}</span>
+              </span>
+            </div>
+          )}
         </div>
       </div>
       {isExpanded && (
@@ -999,12 +1012,13 @@ const SECTION_KEYWORDS: [string, string][] = [
 // ─── Budget Print Modal ─────────────────────────────────────────────────────────
 
 function BudgetPrintModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { goals, categories, recurring, budgetSections: rawBudgetSections, accounts, activeBudgetId, getBudgetSummary } = useStore();
+  const { goals, categories, recurring, budgetSections: rawBudgetSections, accounts, activeBudgetId, getBudgetSummary, expenses } = useStore();
   const budgetSections = rawBudgetSections ?? [];
   const summary = activeBudgetId ? getBudgetSummary(activeBudgetId) : null;
   const activeBudget = summary?.budget;
   if (!summary || !activeBudget) return null;
   const { startDate, endDate } = getBudgetDateRange(activeBudget);
+  const budgetExpenses = expenses.filter(e => e.budgetId === activeBudgetId && e.date >= startDate && e.date <= endDate && e.isWithdrawal !== true);
   const sectionLookup = new Map(budgetSections.map(s => [s.id, s]));
   const goalLookup = new Map(goals.map(g => [g.id, g]));
   const budgetCats = summary.categories.filter((c: any) => !c.isRounding);
@@ -1071,7 +1085,8 @@ function BudgetPrintModal({ visible, onClose }: { visible: boolean; onClose: () 
           {summary.carryover > 0 && <span>Carryover: {formatCurrency(summary.carryover)}</span>}
           {summary.totalRoundingSaved > 0 && <span>Round-up saved: {formatCurrency(summary.totalRoundingSaved)}</span>}
           {summary.uncategorizedTotal > 0 && <span>Uncategorized: {formatCurrency(summary.uncategorizedTotal)}</span>}
-          <span>Remaining: {formatCurrency(summary.totalIncome - summary.totalSpent)}</span>
+          {summary.allocatedToGoals > 0 && <span className="text-success">To goals: {formatCurrency(summary.allocatedToGoals)}</span>}
+          <span>Remaining: {formatCurrency(summary.remaining)}</span>
         </div>
 
         {/* ── Income Sources ── */}
@@ -1120,6 +1135,10 @@ function BudgetPrintModal({ visible, onClose }: { visible: boolean; onClose: () 
                       <div className="text-[10px] text-muted-foreground mt-1 space-y-0.5">
                         {linkedCats.length > 0 && <p>Categories: {linkedCats.map(c => c.name).join(", ")}</p>}
                         {linkedRecurring.length > 0 && <p>Recurring: {linkedRecurring.map(r => r.description).join(", ")}</p>}
+                        {(() => {
+                          const contribAmt = budgetExpenses.filter(e => e.goalId === g.id).reduce((s, e) => s + e.amount, 0);
+                          return contribAmt > 0 ? <p className="text-success">+{formatCurrency(contribAmt)} funded from budget this period</p> : null;
+                        })()}
                       </div>
                     )}
                   </div>
@@ -1148,10 +1167,12 @@ function BudgetPrintModal({ visible, onClose }: { visible: boolean; onClose: () 
                       {cats.map((cat: any) => {
                         const monthly = catMonthly(cat);
                         const spent = cat.spent ?? 0;
-                        const available = monthly - spent;
-                        const pct = monthly > 0 ? spent / monthly : 0;
-                        const overBudget = monthly > 0 && spent > monthly;
                         const linkedGoal = cat.linkedGoalId != null ? goalLookup.get(cat.linkedGoalId) : null;
+                        const contributions = linkedGoal ? budgetExpenses.filter(e => e.goalId === linkedGoal.id).reduce((s, e) => s + e.amount, 0) : 0;
+                        const funded = monthly + contributions;
+                        const available = funded - spent;
+                        const pct = funded > 0 ? spent / funded : 0;
+                        const overBudget = funded > 0 && spent > funded;
                         return (
                           <div key={cat.id} className="flex items-center gap-2 py-1">
                             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color }} />
@@ -1168,7 +1189,7 @@ function BudgetPrintModal({ visible, onClose }: { visible: boolean; onClose: () 
                                   </span>
                                 </div>
                               </div>
-                              {monthly > 0 && (
+                              {funded > 0 && (
                                 <div className="h-1 rounded-full bg-muted overflow-hidden mt-0.5">
                                   <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(pct * 100, 100)}%`, backgroundColor: overBudget ? "var(--danger)" : cat.color }} />
                                 </div>
@@ -1483,6 +1504,9 @@ export function BudgetPage() {
                     {item.label === "Spent" && summary.totalRoundingSaved > 0 && (
                       <p className="text-[10px] text-success mt-0.5">+{formatCurrency(summary.totalRoundingSaved)} round-up saved</p>
                     )}
+                    {item.label === "Allocated" && summary.allocatedToGoals > 0 && (
+                      <p className="text-[10px] text-success mt-0.5">+{formatCurrency(summary.allocatedToGoals)} to goals</p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1501,6 +1525,9 @@ export function BudgetPage() {
                     <span className="text-warning">Uncategorized: {formatCurrency(summary.uncategorizedTotal)}</span>
                   )}
                   <span>Remaining after spend: {formatCurrency(summary.remaining)}</span>
+                  {summary.allocatedToGoals > 0 && (
+                    <span className="text-success">Saved to goals: {formatCurrency(summary.allocatedToGoals)}</span>
+                  )}
                   {(() => {
                     const { startDate, endDate } = getBudgetDateRange(activeBudget);
                     const start = new Date(startDate);
@@ -1726,68 +1753,43 @@ export function BudgetPage() {
 
             {/* Category Filter */}
             <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-thin pb-1 mb-3 -mx-1 px-1">
-              <button
-                onClick={() => setFilterCategoryId(null)}
-                className={cn(
-                  "flex-shrink-0 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
-                  filterCategoryId === null ? "bg-foreground text-background border-foreground" : "bg-card text-muted-foreground border-border hover:border-muted-foreground/30",
-                )}
-              >
-                All
-              </button>
+              <FilterPill label="All" active={filterCategoryId === null} onClick={() => setFilterCategoryId(null)} className="flex-shrink-0" />
               {summary.categories.filter((c: any) => !c.isRounding).sort((a: any, b: any) => a.name.localeCompare(b.name)).map((cat: any) => (
-                <button
+                <FilterPill
                   key={cat.id}
+                  label={cat.name}
+                  active={filterCategoryId === cat.id}
                   onClick={() => setFilterCategoryId(filterCategoryId === cat.id ? null : cat.id)}
-                  className={cn(
-                    "flex-shrink-0 flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
-                    filterCategoryId === cat.id ? "text-foreground border-foreground" : "text-muted-foreground border-border hover:border-muted-foreground/30",
-                  )}
-                  style={filterCategoryId === cat.id ? { backgroundColor: cat.color + "20", borderColor: cat.color } : {}}
-                >
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: cat.color }} />
-                  {cat.name}
-                </button>
+                  color={cat.color}
+                  dot={cat.color}
+                  className="flex-shrink-0"
+                />
               ))}
               {summary.uncategorizedTotal > 0 && (
-                <button
+                <FilterPill
+                  label="Uncategorized"
+                  active={filterCategoryId === "uncategorized"}
                   onClick={() => setFilterCategoryId(filterCategoryId === "uncategorized" ? null : "uncategorized")}
-                  className={cn(
-                    "flex-shrink-0 flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
-                    filterCategoryId === "uncategorized" ? "bg-warning/20 text-warning border-warning" : "text-muted-foreground border-border hover:border-warning/50",
-                  )}
-                >
-                  <span className="w-2 h-2 rounded-full bg-warning" />
-                  Uncategorized
-                </button>
+                  color={Colors.warning}
+                  dot={Colors.warning}
+                  className="flex-shrink-0"
+                />
               )}
             </div>
 
             {/* Account Filter */}
             {accounts.length > 0 && (
               <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-thin pb-1 mb-3 -mx-1 px-1">
-                <button
-                  onClick={() => setFilterAccountId(null)}
-                  className={cn(
-                    "flex-shrink-0 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
-                    filterAccountId === null ? "bg-foreground text-background border-foreground" : "bg-card text-muted-foreground border-border hover:border-muted-foreground/30",
-                  )}
-                >
-                  All accounts
-                </button>
+                <FilterPill label="All accounts" active={filterAccountId === null} onClick={() => setFilterAccountId(null)} className="flex-shrink-0" />
                 {accounts.map((acc: any) => (
-                  <button
+                  <FilterPill
                     key={acc.id}
+                    label={acc.name}
+                    active={filterAccountId === acc.id}
                     onClick={() => setFilterAccountId(filterAccountId === acc.id ? null : acc.id)}
-                    className={cn(
-                      "flex-shrink-0 flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full transition-colors border",
-                      filterAccountId === acc.id ? "text-foreground border-foreground" : "text-muted-foreground border-border hover:border-muted-foreground/30",
-                    )}
-                    style={filterAccountId === acc.id ? { backgroundColor: Colors.primary + "20", borderColor: Colors.primary } : {}}
-                  >
-                    <Wallet size={11} />
-                    {acc.name}
-                  </button>
+                    color={Colors.primary}
+                    className="flex-shrink-0"
+                  />
                 ))}
               </div>
             )}

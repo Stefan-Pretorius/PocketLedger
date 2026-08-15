@@ -145,7 +145,7 @@ export function Dashboard() {
       a.year !== b.year ? a.year - b.year : a.month - b.month,
     ).slice(-6);
     return sorted.map(b => {
-      const spent = expenses.filter(e => e.budgetId === b.id && e.isWithdrawal !== true).reduce((s, e) => s + e.amount, 0);
+      const spent = expenses.filter(e => e.budgetId === b.id && e.isWithdrawal !== true && e.goalId == null).reduce((s, e) => s + e.amount, 0);
       return { label: `${monthName(b.month).slice(0, 3)} ${String(b.year).slice(2)}`, spent, income: b.totalIncome };
     });
   }, [budgets, expenses]);
@@ -202,6 +202,10 @@ export function Dashboard() {
                 sub={`${summary.totalAllocated > 0 ? Math.round(summary.totalSpent / summary.totalAllocated * 100) : 0}% of allocated`} />
               <StatCard label="Remaining" value={formatCurrency(summary.remaining)} icon={TrendingUp}
                 color={summary.remaining >= 0 ? Colors.success : Colors.danger} />
+              {summary.allocatedToGoals > 0 && (
+                <StatCard label="Saved to Goals" value={formatCurrency(summary.allocatedToGoals)} icon={Target}
+                  color={Colors.success} sub="goal contributions" />
+              )}
               {summary.totalRoundingSaved > 0 ? (
                 <StatCard label="Round-up Saved" value={formatCurrency(summary.totalRoundingSaved)} icon={Wallet}
                   color={Colors.success} sub="from savings transfers" />

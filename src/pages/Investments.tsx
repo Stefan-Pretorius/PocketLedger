@@ -4,13 +4,13 @@ import { formatCurrency, formatDate, monthlyCategoryAmount } from "../utils";
 import { Colors } from "../theme";
 import {
   Card, Button, Input, Modal, EmptyState, SectionHeader,
-  ColorPicker, ColorDot, Confirm, ProgressBar,
+  ColorPicker, ColorDot, Confirm, ProgressBar, SearchInput,
 } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import {
   Plus, Trash2, TrendingUp, TrendingDown, DollarSign,
   BarChart3, Wallet, Bitcoin, Activity, PieChart, ChevronRight,
-  RefreshCw, Sparkles, User, Users, LayoutGrid, List,
+  RefreshCw, Sparkles, User, Users, LayoutGrid, List, Search,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -352,10 +352,7 @@ function HoldingModal({
           <div className="flex-1">
             <Input label="Ticker/Symbol" value={symbol} onChange={setSymbol} placeholder={type === "crypto" ? "e.g. bitcoin, ethereum" : "e.g. VAS, BHP"} />
           </div>
-          <button onClick={fetchPrice} disabled={fetchingPrice || !symbol.trim()}
-            className={cn("px-3 py-2 rounded-lg text-xs font-medium transition-colors flex-shrink-0", fetchingPrice ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary hover:bg-primary/20")}>
-            {fetchingPrice ? "..." : "Fetch"}
-          </button>
+          <Button label={fetchingPrice ? "Fetching…" : "Fetch"} onClick={fetchPrice} disabled={fetchingPrice || !symbol.trim()} size="sm" variant="outline" icon={RefreshCw} loading={fetchingPrice} />
         </div>
         <div>
           <label className="text-sm font-medium text-muted-foreground block mb-2">Type</label>
@@ -1898,6 +1895,14 @@ export function InvestmentsPage() {
     () => (localStorage.getItem("investmentsView") as "cards" | "compact" | "list") ?? "cards",
   );
   const setView = (mode: "cards" | "compact" | "list") => { setViewMode(mode); localStorage.setItem("investmentsView", mode); };
+  const [holdingSearch, setHoldingSearch] = useState("");
+  const visibleHoldings = useMemo(() => {
+    const q = holdingSearch.trim().toLowerCase();
+    if (!q) return portfolio.holdingSummaries;
+    return portfolio.holdingSummaries.filter(s =>
+      s.holding.name.toLowerCase().includes(q) || (s.holding.symbol ?? "").toLowerCase().includes(q),
+    );
+  }, [portfolio.holdingSummaries, holdingSearch]);
 
   if (detailHoldingId != null) {
     return (
@@ -1995,9 +2000,13 @@ export function InvestmentsPage() {
                   </div>
                 </div>
               </div>
+              <SearchInput value={holdingSearch} onChange={setHoldingSearch} placeholder="Search holdings…" className="mb-2" />
+              {visibleHoldings.length === 0 && (
+                <EmptyState icon={Search} title={holdingSearch ? "No matching holdings" : "No holdings yet"} subtitle={holdingSearch ? "Try a different search term." : undefined} />
+              )}
               {viewMode === "cards" && (
                 <div className="space-y-2">
-                  {portfolio.holdingSummaries.map(s => {
+                  {visibleHoldings.map(s => {
                     const hasValue = s.marketValue > 0;
                     const gainPct = s.totalCostBasis > 0 ? s.unrealizedGainLossPct : null;
                     return (
@@ -2041,7 +2050,7 @@ export function InvestmentsPage() {
               )}
               {viewMode === "compact" && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {portfolio.holdingSummaries.map(s => {
+                  {visibleHoldings.map(s => {
                     const hasValue = s.marketValue > 0;
                     const gainPct = s.totalCostBasis > 0 ? s.unrealizedGainLossPct : null;
                     return (
@@ -2069,12 +2078,12 @@ export function InvestmentsPage() {
               )}
               {viewMode === "list" && (
                 <Card padding={false}>
-                  {portfolio.holdingSummaries.map((s, i) => {
+                  {visibleHoldings.map((s, i) => {
                     const hasValue = s.marketValue > 0;
                     const gainPct = s.totalCostBasis > 0 ? s.unrealizedGainLossPct : null;
                     return (
                       <div key={s.holding.id} onClick={() => setDetailHoldingId(s.holding.id)}
-                        className={cn("flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors", i < portfolio.holdingSummaries.length - 1 && "border-b border-border")}>
+                        className={cn("flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-muted/30 transition-colors", i < visibleHoldings.length - 1 && "border-b border-border")}>
                         <HoldingIcon holding={s.holding} size={12} />
                         <p className="text-xs font-medium text-foreground flex-1 min-w-0 truncate">{s.holding.name}</p>
                         <span className="text-[9px] text-muted-foreground flex-shrink-0">{HOLDING_TYPE_LABELS[s.holding.type]}</span>

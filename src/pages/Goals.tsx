@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { useStore } from "../store";
-import { formatCurrency, formatDate } from "../utils";
+import { formatCurrency, formatDate, getBudgetDateRange } from "../utils";
 import { Colors } from "../theme";
 import {
   Card, Button, Input, Modal, EmptyState, ProgressBar,
   ColorPicker, ColorDot, Confirm,
 } from "../components/ui";
 import { PageHeader } from "../components/Layout";
-import { Plus, Trash2, Edit2, Target, TrendingUp, LayoutGrid, List, Banknote, Repeat, Hash, Users } from "lucide-react";
+import { Plus, Trash2, Edit2, Target, TrendingUp, LayoutGrid, List, Banknote, Repeat, Hash, Users, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Goal } from "../types";
@@ -250,7 +250,17 @@ function ContributeModal({
 }
 
 export function GoalsPage() {
-  const { goals, expenses, deleteGoal, accounts } = useStore();
+  const { goals, expenses, deleteGoal, accounts, categories, budgets, activeBudgetId } = useStore();
+  const activeBudget = activeBudgetId != null ? budgets.find(b => b.id === activeBudgetId) : undefined;
+  const periodRange = activeBudget ? getBudgetDateRange(activeBudget) : null;
+  const goalContribInPeriod = (goalId: number) => expenses
+    .filter(e => e.goalId === goalId && !e.isWithdrawal
+      && (periodRange == null || (e.date >= periodRange.startDate && e.date <= periodRange.endDate)))
+    .reduce((s, e) => s + e.amount, 0);
+  const budgetFundedGoalIds = new Set<number>([
+    ...categories.filter(c => c.linkedGoalId != null).map(c => c.linkedGoalId!),
+    ...goals.filter(g => g.autoContributionAmount != null && g.autoContributionAmount > 0).map(g => g.id),
+  ]);
   const [showNew, setShowNew] = useState(false);
   const [editGoal, setEditGoal] = useState<typeof goals[0] | null>(null);
   const [contributeGoal, setContributeGoal] = useState<typeof goals[0] | null>(null);
@@ -441,6 +451,19 @@ export function GoalsPage() {
                           <span className="font-medium">{bonusInterestEarned ? "Bonus interest earned" : "No bonus this month"}</span>
                           <span>· Est. {formatCurrency(monthlyInterest)}/mo</span>
                           {bonusInterestEarned && <span>· No withdrawals this month</span>}
+                        </div>
+                      )}
+
+                      {budgetFundedGoalIds.has(g.id) && (
+                        <div className="mb-2 flex items-center gap-2 text-[10px] text-muted-foreground">
+                          <Wallet size={10} className="flex-shrink-0" />
+                          <span>Budget funding this period:</span>
+                          {(() => {
+                            const amt = goalContribInPeriod(g.id);
+                            return amt > 0
+                              ? <span className="text-success font-medium">+{formatCurrency(amt)}</span>
+                              : <span className="text-amber-600 dark:text-amber-400 font-medium">None yet</span>;
+                          })()}
                         </div>
                       )}
 

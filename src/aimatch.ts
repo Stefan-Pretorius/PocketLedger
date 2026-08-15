@@ -49,6 +49,13 @@ export function getAiConfig(): AiConfig | null {
   }
 }
 
+/** Resolve the AI config to use. Falls back to the default local server
+ *  (http://localhost:4096) so AI features work with zero setup once the
+ *  `opencode serve` command from Settings has been started. */
+export function getEffectiveConfig(): AiConfig {
+  return getAiConfig() ?? { serverUrl: defaultServerUrl() };
+}
+
 export function setAiConfig(c: AiConfig) {
   localStorage.setItem(CONFIG_KEY, JSON.stringify(c));
 }
@@ -76,8 +83,9 @@ async function request(
 ): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let res: Response;
   try {
-    const res = await fetch(normalizeUrl(config.serverUrl) + path, {
+    res = await fetch(normalizeUrl(config.serverUrl) + path, {
       ...init,
       headers: {
         "Content-Type": "application/json",
@@ -86,21 +94,70 @@ async function request(
       },
       signal: ctrl.signal,
     });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Server responded HTTP ${res.status}: ${body.slice(0, 300)}`);
-    }
-    return res;
+  } catch (e) {
+    const reason = (e as Error).message ?? String(e);
+    throw new Error(
+      `Cannot reach the AI server at ${config.serverUrl} (${reason}). ` +
+        `Start it with "opencode serve" — the exact command is in Settings → AI Statement Matching — then try again.`,
+    );
   } finally {
     clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    const looksHtml = /^<!DOCTYPE|^<html/i.test(body.trimStart());
+    if (res.status === 401) {
+      throw new Error(
+        looksHtml
+          ? `The server at ${config.serverUrl} returned a 401 HTML page — that is not the opencode server. Is another app using port 4096?`
+          : `AI server returned 401 Unauthorized. If the server was started with OPENCODE_SERVER_PASSWORD, ` +
+            `enter that same password in Settings → AI Statement Matching. If not, clear the password field.`,
+      );
+    }
+    throw new Error(
+      looksHtml
+        ? `The server at ${config.serverUrl} returned an HTML error page (HTTP ${res.status}) — not the opencode server. ` +
+          `Check that nothing else is using port 4096, then restart "opencode serve".`
+        : `Server responded HTTP ${res.status}: ${body.slice(0, 300)}`,
+    );
+  }
+  return res;
+}
+
+/** Parse a successful response body as JSON, giving a clear error when a web
+ *  page (HTML) is returned instead — e.g. the Server URL points at the app's
+ *  own dev server or another website rather than the opencode server. */
+async function expectJson(res: Response, config: AiConfig): Promise<unknown> {
+  const text = await res.text().catch(() => "");
+  const trimmed = text.trimStart();
+  if (!text) {
+    throw new Error(`The server at ${config.serverUrl} returned an empty response.`);
+  }
+  if (trimmed.startsWith("<")) {
+    const appOrigin = `${window.location.protocol}//${window.location.host}`;
+    const sameAsApp = normalizeUrl(config.serverUrl).startsWith(normalizeUrl(appOrigin));
+    throw new Error(
+      sameAsApp
+        ? `The server at ${config.serverUrl} returned a web page — that is the app's own address. ` +
+          `Server URL must point to the opencode server (default http://localhost:4096), not the app.`
+        : `The server at ${config.serverUrl} returned an HTML page instead of JSON — that is not the opencode server. ` +
+          `Start "opencode serve" (Settings → AI Statement Matching shows the command) and make sure nothing else is using port 4096.`,
+    );
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(
+      `The server at ${config.serverUrl} returned invalid JSON. Make sure "opencode serve" is running and the URL is correct.`,
+    );
   }
 }
 
 export async function testAiConnection(config: AiConfig): Promise<{ ok: boolean; version?: string; error?: string }> {
   try {
     const res = await request(config, "/global/health", undefined, 10000);
-    const data = await res.json();
-    return { ok: true, version: data.version };
+    const data = (await expectJson(res, config)) as { version?: string };
+    return { ok: true, version: data?.version };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
@@ -111,7 +168,7 @@ export async function createSession(config: AiConfig, title: string): Promise<st
     method: "POST",
     body: JSON.stringify({ title }),
   });
-  const data = await res.json();
+  const data = (await expectJson(res, config)) as { id?: string };
   if (!data?.id) throw new Error("No session id returned");
   return data.id as string;
 }
@@ -137,8 +194,8 @@ export async function sendMessage(
       parts: [{ type: "text", text: opts.text }],
     }),
   });
-  const data = await res.json();
-  const parts: Array<{ type?: string; text?: string }> = data?.parts ?? [];
+  const data = (await expectJson(res, config)) as { parts?: Array<{ type?: string; text?: string }> };
+  const parts = data?.parts ?? [];
   return parts.filter(p => p.type === "text").map(p => p.text ?? "").join("\n").trim();
 }
 

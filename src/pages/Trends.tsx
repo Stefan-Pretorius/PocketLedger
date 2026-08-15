@@ -315,7 +315,7 @@ export function TrendsPage() {
     return sorted.map(b => {
       const { startDate, endDate } = getBudgetDateRange(b);
       const budgetExpenses = expenses.filter(
-        e => e.budgetId === b.id && e.date >= startDate && e.date <= endDate && e.isWithdrawal !== true,
+        e => e.budgetId === b.id && e.date >= startDate && e.date <= endDate && e.isWithdrawal !== true && e.goalId == null,
       );
       const spent = budgetExpenses.reduce((s, e) => s + e.amount, 0);
       const saved = b.totalIncome - spent;
@@ -348,7 +348,7 @@ export function TrendsPage() {
         if (!cat) return 0;
         const { startDate, endDate } = getBudgetDateRange(budget);
         return expenses.filter(
-          e => e.budgetId === budget.id && e.categoryId === cat.id && e.date >= startDate && e.date <= endDate,
+          e => e.budgetId === budget.id && e.categoryId === cat.id && e.date >= startDate && e.date <= endDate && e.goalId == null,
         ).reduce((s, e) => s + e.amount, 0);
       });
 

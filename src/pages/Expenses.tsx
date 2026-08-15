@@ -4,11 +4,11 @@ import { formatCurrency, formatDate, today, currentMonth, getBudgetDateRange } f
 import { Colors } from "../theme";
 import {
   Card, Button, Input, Modal, EmptyState, SectionHeader,
-  ColorDot, Confirm, Badge, AccountPicker,
+  ColorDot, Confirm, Badge, AccountPicker, SearchInput, FilterPill,
 } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { BudgetYearTabs, BudgetMonthGrid } from "../components/BudgetPicker";
-import { Plus, Trash2, Edit2, Receipt, Search, Filter, ChevronDown, Target, Repeat, LayoutGrid, List, Columns2, ChevronRight } from "lucide-react";
+import { Plus, Trash2, Edit2, Receipt, ChevronDown, Target, Repeat, LayoutGrid, List, Columns2, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -426,7 +426,7 @@ export function ExpensesPage() {
         subtitle={activeBudget ? activeBudget.name : undefined}
         actions={
           activeBudgetId
-            ? <Button label="Add" onClick={() => setShowNew(true)} variant="primary"  icon={Plus} />
+            ? <Button label="Add" onClick={() => setShowNew(true)} variant="primary" size="sm" icon={Plus} />
             : undefined
         }
       />
@@ -452,82 +452,52 @@ export function ExpensesPage() {
             {/* View tabs */}
             <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
               {(["all", "categorized", "uncategorized", "transfers"] as const).map(tab => (
-                <button
+                <FilterPill
                   key={tab}
+                  label={tab === "transfers" ? "Transfers" : tab}
+                  active={filterTab === tab}
                   onClick={() => { setFilterTab(tab); setFilterCat(null); }}
-                  className={cn(
-                    "flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors capitalize",
-                    filterTab === tab ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80",
-                  )}
-                >
-                  {tab === "transfers" ? "Transfers" : tab}
-                </button>
+                  className="flex-shrink-0 capitalize"
+                />
               ))}
             </div>
 
             {/* Search + filter */}
             <div className="space-y-2">
-              <Input
-                value={search}
-                onChange={setSearch}
-                placeholder="Search expenses…"
-                prefix="🔍"
-              />
+              <SearchInput value={search} onChange={setSearch} placeholder="Search expenses…" />
               {budgetCats.length > 0 && (
                 <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
-                  <button
-                    onClick={() => setFilterCat(null)}
-                    className={cn(
-                      "flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors",
-                      filterCat === null ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80",
-                    )}
-                  >
-                    All
-                  </button>
-                  <button
+                  <FilterPill label="All" active={filterCat === null} onClick={() => setFilterCat(null)} className="flex-shrink-0" />
+                  <FilterPill
+                    label="Uncategorized"
+                    active={filterCat === -1}
                     onClick={() => setFilterCat(filterCat === -1 ? null : -1)}
-                    className={cn(
-                      "flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors",
-                      filterCat === -1 ? "bg-warning text-warning-foreground" : "bg-muted text-foreground hover:bg-muted/80",
-                    )}
-                  >
-                    Uncategorized
-                  </button>
+                    color={Colors.warning}
+                    className="flex-shrink-0"
+                  />
                   {[...budgetCats].sort((a, b) => a.name.localeCompare(b.name)).map(cat => (
-                    <button
+                    <FilterPill
                       key={cat.id}
+                      label={cat.name}
+                      active={filterCat === cat.id}
                       onClick={() => setFilterCat(filterCat === cat.id ? null : cat.id)}
-                      className="flex-shrink-0 flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors bg-muted text-foreground hover:bg-muted/80"
-                      style={filterCat === cat.id ? { backgroundColor: cat.color + "20", color: cat.color } : undefined}
-                    >
-                      <ColorDot color={cat.color} size={6} />
-                      {cat.name}
-                    </button>
+                      color={cat.color}
+                      className="flex-shrink-0 flex items-center gap-1"
+                    />
                   ))}
                 </div>
               )}
               {accounts.length > 0 && (
                 <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
-                  <button
-                    onClick={() => setFilterAccount(null)}
-                    className={cn(
-                      "flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors",
-                      filterAccount === null ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80",
-                    )}
-                  >
-                    All accounts
-                  </button>
+                  <FilterPill label="All accounts" active={filterAccount === null} onClick={() => setFilterAccount(null)} className="flex-shrink-0" />
                   {accounts.map(acc => (
-                    <button
+                    <FilterPill
                       key={acc.id}
+                      label={acc.name}
+                      active={filterAccount === acc.id}
                       onClick={() => setFilterAccount(filterAccount === acc.id ? null : acc.id)}
-                      className={cn(
-                        "flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors capitalize",
-                        filterAccount === acc.id ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80",
-                      )}
-                    >
-                      {acc.name}
-                    </button>
+                      className="flex-shrink-0 capitalize"
+                    />
                   ))}
                 </div>
               )}
@@ -544,12 +514,11 @@ export function ExpensesPage() {
                 </span>
                 <div className="flex items-center gap-1.5">
                   {filterTab !== "transfers" && (
-                    <>
-                      <button onClick={() => setView("cards")} className={cn("p-1.5 rounded-lg transition-colors", viewMode === "cards" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60")} title="Card view"><LayoutGrid size={14} /></button>
-                      <button onClick={() => setView("compact")} className={cn("p-1.5 rounded-lg transition-colors", viewMode === "compact" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60")} title="Compact view"><Columns2 size={14} /></button>
-                      <button onClick={() => setView("list")} className={cn("p-1.5 rounded-lg transition-colors", viewMode === "list" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60")} title="List view"><List size={14} /></button>
-                      <div className="w-px h-4 bg-border mx-0.5" />
-                    </>
+                    <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
+                      <button onClick={() => setView("cards")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "cards" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Card view"><LayoutGrid size={14} /></button>
+                      <button onClick={() => setView("compact")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "compact" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="Compact view"><Columns2 size={14} /></button>
+                      <button onClick={() => setView("list")} className={cn("p-1.5 rounded-md transition-colors", viewMode === "list" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")} title="List view"><List size={14} /></button>
+                    </div>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
@@ -559,7 +528,7 @@ export function ExpensesPage() {
                       <button onClick={toggleSelectAll} className="text-xs text-primary hover:underline">
                         {selectedIds.size === filtered.length ? "Deselect all" : "Select all"}
                       </button>
-                      <Button label="Delete" onClick={() => setConfirmBulkDelete(true)} variant="primary"  icon={Trash2} />
+                      <Button label="Delete" onClick={() => setConfirmBulkDelete(true)} variant="danger" size="sm" icon={Trash2} />
                     </>
                   )}
                   <span className={cn("font-semibold", selectedIds.size > 0 && "ml-2")}>{formatCurrency(totalFiltered)}</span>

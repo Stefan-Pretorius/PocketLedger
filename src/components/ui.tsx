@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type ReactNode } from "react";
-import { Loader2, X } from "lucide-react";
+import { Loader2, X, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Account } from "../types";
 
@@ -50,7 +50,7 @@ export function ProgressBar({
 export function Button({
   label, onClick, variant = "primary", size = "md", loading, disabled, fullWidth, icon: Icon, className,
 }: {
-  label: string; onClick?: () => void; variant?: "primary" | "secondary" | "danger" | "ghost";
+  label: string; onClick?: () => void; variant?: "primary" | "secondary" | "danger" | "ghost" | "outline";
   size?: "sm" | "md"; loading?: boolean; disabled?: boolean; fullWidth?: boolean;
   icon?: React.ElementType; className?: string;
 }) {
@@ -61,6 +61,7 @@ export function Button({
     secondary: "bg-muted text-foreground hover:bg-muted/80 border border-border",
     danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
     ghost: "text-foreground hover:bg-accent",
+    outline: "bg-background text-foreground hover:bg-muted border border-border",
   };
   return (
     <button
@@ -118,6 +119,62 @@ export function Input({
         {sublabel && <p className="text-[11px] text-muted-foreground">{sublabel}</p>}
       </div>
     </div>
+  );
+}
+
+export function SearchInput({
+  value, onChange, placeholder = "Search…", className, autoFocus,
+}: {
+  value: string; onChange: (v: string) => void; placeholder?: string; className?: string; autoFocus?: boolean;
+}) {
+  return (
+    <div className={cn("relative", className)}>
+      <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        className="w-full bg-background border border-input rounded-lg text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors pl-8 pr-8 py-2"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          aria-label="Clear search"
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        >
+          <X size={13} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function FilterPill({
+  label, active, onClick, color, dot, className,
+}: {
+  label: string; active: boolean; onClick: () => void; color?: string; dot?: string; className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full text-xs font-medium px-3 py-1 transition-colors",
+        active
+          ? color
+            ? "text-foreground"
+            : "bg-primary text-primary-foreground"
+          : "bg-muted text-muted-foreground hover:bg-muted/80",
+        className,
+      )}
+      style={active && color ? { backgroundColor: color + "26", color } : undefined}
+    >
+      {dot && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: dot }} />}
+      {label}
+    </button>
   );
 }
 

@@ -475,14 +475,15 @@ export function ScenariosPage() {
   }, [summaries]);
 
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 pb-8">
+    <div className="pb-8">
       <PageHeader
         title="Scenarios"
         subtitle="Create and compare investment scenarios with Monte Carlo projections"
         actions={
-          <Button label="New Scenario" icon={Plus} onClick={openNew} />
+          <Button label="New Scenario" icon={Plus} onClick={openNew} size="sm" />
         }
       />
+      <div className="max-w-5xl mx-auto px-4 sm:px-6">
 
       {/* Baseline chart — current portfolio trend */}
       {baselineProjection && baselineProjection.points && (
@@ -653,6 +654,7 @@ export function ScenariosPage() {
           </div>
         </div>
       </Modal>
+      </div>
     </div>
   );
 }
@@ -696,9 +698,9 @@ function ScenarioCard({ scenario, summaries, holdings, onEdit, onDuplicate, onDe
           )}
         </div>
         <div className="flex items-center gap-1">
-          <button onClick={onEdit} className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground"><Edit2 size={14} /></button>
-          <button onClick={onDuplicate} className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground"><Copy size={14} /></button>
-          <button onClick={onDelete} className="p-1 rounded hover:bg-muted transition-colors text-destructive"><Trash2 size={14} /></button>
+          <button onClick={onEdit} className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"><Edit2 size={14} /></button>
+          <button onClick={onDuplicate} className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground"><Copy size={14} /></button>
+          <button onClick={onDelete} className="p-1.5 rounded-lg hover:bg-muted transition-colors text-destructive"><Trash2 size={14} /></button>
         </div>
       </div>
 
